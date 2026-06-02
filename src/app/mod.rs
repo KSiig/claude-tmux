@@ -9,7 +9,7 @@
 mod helpers;
 mod mode;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -60,6 +60,8 @@ pub struct App {
     pub scroll_state: ScrollState,
     /// Cache of last captured content per pane ID, used for content-change status detection
     pane_content_cache: HashMap<String, String>,
+    /// Pane IDs that have been Working while unfocused, used to detect Done transitions
+    worked_unfocused: HashSet<String>,
     /// Timestamp of the last status tick
     last_status_tick: Instant,
 }
@@ -90,6 +92,7 @@ impl App {
             pr_info: None,
             scroll_state: ScrollState::new(),
             pane_content_cache: HashMap::new(),
+            worked_unfocused: HashSet::new(),
             last_status_tick: Instant::now(),
         };
 
@@ -142,15 +145,47 @@ impl App {
             };
 
             let comparable = content_above_status_bar(&content);
-            let status = match self.pane_content_cache.get(&pane_id) {
+            let raw_status = match self.pane_content_cache.get(&pane_id) {
                 Some(prev) if content_above_status_bar(prev) != comparable => ClaudeCodeStatus::Working,
                 Some(_) => detect_static_status(&content),
                 None => detect_status(&content),
             };
 
+            let is_focused = self.sessions[idx].attached;
+
+            if raw_status == ClaudeCodeStatus::Working && !is_focused {
+                self.worked_unfocused.insert(pane_id.clone());
+            }
+            if is_focused {
+                self.worked_unfocused.remove(&pane_id);
+            }
+
+            let status = if raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.remove(&pane_id) {
+                ClaudeCodeStatus::Done
+            } else if self.sessions[idx].claude_code_status == ClaudeCodeStatus::Done
+                && raw_status == ClaudeCodeStatus::Idle
+                && !is_focused
+            {
+                ClaudeCodeStatus::Done
+            } else {
+                raw_status
+            };
+
             self.sessions[idx].claude_code_status = status;
             self.pane_content_cache.insert(pane_id, content);
         }
+
+        self.write_status_file();
+    }
+
+    /// Write session status counts to a file for external consumers (e.g. status lines).
+    fn write_status_file(&self) {
+        let (working, waiting, idle, done) = self.status_counts();
+        let content = format!(
+            "working={}\ndone={}\nidle={}\nwaiting={}\ntotal={}\n",
+            working, done, idle, waiting, self.sessions.len()
+        );
+        let _ = std::fs::write("/tmp/claude-tmux-status", content);
     }
 
     /// Clear any displayed messages
@@ -170,6 +205,7 @@ impl App {
     /// Refresh sessions without affecting messages (for use after git operations)
     fn refresh_sessions(&mut self) -> bool {
         self.pane_content_cache.clear();
+        self.worked_unfocused.clear();
         match Tmux::list_sessions() {
             Ok(sessions) => {
                 self.sessions = sessions;
@@ -234,8 +270,15 @@ impl App {
     /// Switch to the selected session
     pub fn switch_to_selected(&mut self) {
         self.clear_messages();
-        if let Some(session) = self.selected_session() {
-            let target = session.switch_target();
+        if let Some(idx) = self.selected_session_index() {
+            self.sessions[idx].claude_code_status = match self.sessions[idx].claude_code_status {
+                ClaudeCodeStatus::Done => ClaudeCodeStatus::Idle,
+                other => other,
+            };
+            if let Some(ref pane_id) = self.sessions[idx].claude_code_pane {
+                self.worked_unfocused.remove(pane_id);
+            }
+            let target = self.sessions[idx].switch_target();
             match Tmux::switch_to_session(&target) {
                 Ok(_) => {
                     self.should_quit = true;
@@ -245,6 +288,13 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Get the index into self.sessions for the currently selected filtered session
+    fn selected_session_index(&self) -> Option<usize> {
+        let filtered = self.filtered_sessions();
+        let session = filtered.get(self.selected)?;
+        self.sessions.iter().position(|s| std::ptr::eq(s, *session))
     }
 
     // =========================================================================
@@ -1068,23 +1118,25 @@ impl App {
     // =========================================================================
 
     /// Count sessions by status
-    pub fn status_counts(&self) -> (usize, usize, usize) {
+    pub fn status_counts(&self) -> (usize, usize, usize, usize) {
         use crate::session::ClaudeCodeStatus;
 
         let mut working = 0;
         let mut waiting = 0;
         let mut idle = 0;
+        let mut done = 0;
 
         for session in &self.sessions {
             match session.claude_code_status {
                 ClaudeCodeStatus::Working => working += 1,
+                ClaudeCodeStatus::Done => done += 1,
                 ClaudeCodeStatus::WaitingInput => waiting += 1,
                 ClaudeCodeStatus::Idle => idle += 1,
                 ClaudeCodeStatus::Unknown => {}
             }
         }
 
-        (working, waiting, idle)
+        (working, waiting, idle, done)
     }
 
     // =========================================================================

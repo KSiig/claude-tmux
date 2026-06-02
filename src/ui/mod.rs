@@ -199,6 +199,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         // Use brighter colors when selected so text is readable on dark background
         let status_color = match (status, is_selected) {
             (ClaudeCodeStatus::Working, _) => Color::Green,
+            (ClaudeCodeStatus::Done, _) => Color::Cyan,
             (ClaudeCodeStatus::WaitingInput, _) => Color::Yellow,
             (ClaudeCodeStatus::Idle, true) => Color::White,
             (ClaudeCodeStatus::Idle, false) => Color::DarkGray,
@@ -519,13 +520,16 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let (working, waiting, _idle) = app.status_counts();
+    let (working, waiting, _idle, done) = app.status_counts();
     let total = app.sessions.len();
 
     let mut parts = vec![format!("{} sessions", total)];
 
     if working > 0 {
         parts.push(format!("{} working", working));
+    }
+    if done > 0 {
+        parts.push(format!("{} done", done));
     }
     if waiting > 0 {
         parts.push(format!("{} awaiting input", waiting));

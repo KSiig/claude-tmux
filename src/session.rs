@@ -9,6 +9,8 @@ pub enum ClaudeCodeStatus {
     Idle,
     /// Actively processing a request
     Working,
+    /// Finished processing but user hasn't viewed the session yet
+    Done,
     /// Awaiting user confirmation/input (y/n prompt, etc.)
     WaitingInput,
     /// Cannot determine status
@@ -22,6 +24,7 @@ impl ClaudeCodeStatus {
         match self {
             ClaudeCodeStatus::Idle => "○",
             ClaudeCodeStatus::Working => "●",
+            ClaudeCodeStatus::Done => "◉",
             ClaudeCodeStatus::WaitingInput => "◐",
             ClaudeCodeStatus::Unknown => "?",
         }
@@ -32,6 +35,7 @@ impl ClaudeCodeStatus {
         match self {
             ClaudeCodeStatus::Idle => "idle",
             ClaudeCodeStatus::Working => "working",
+            ClaudeCodeStatus::Done => "done",
             ClaudeCodeStatus::WaitingInput => "input",
             ClaudeCodeStatus::Unknown => "unknown",
         }
