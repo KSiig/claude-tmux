@@ -99,7 +99,7 @@ impl App {
             pane_content_cache: HashMap::new(),
             worked_unfocused,
             done_panes,
-            last_status_tick: Instant::now(),
+            last_status_tick: Instant::now() - Duration::from_secs(1),
         };
 
         app.update_preview();
@@ -286,7 +286,7 @@ impl App {
 
     /// Get filtered sessions based on current filter
     pub fn filtered_sessions(&self) -> Vec<&Session> {
-        if self.filter.is_empty() {
+        let mut sessions: Vec<&Session> = if self.filter.is_empty() {
             self.sessions.iter().collect()
         } else {
             let filter_lower = self.filter.to_lowercase();
@@ -297,7 +297,9 @@ impl App {
                         || s.display_path().to_lowercase().contains(&filter_lower)
                 })
                 .collect()
-        }
+        };
+        sessions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        sessions
     }
 
     /// Get the currently selected session
