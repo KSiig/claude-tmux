@@ -19,6 +19,7 @@ fn has_input_prompt(content: &str) -> bool {
     content.contains("[y/n]")
         || content.contains("[Y/n]")
         || content.contains("shift+tab to approve")
+        || content.contains("Esc to cancel")
 }
 
 /// Detect Claude Code status when content has NOT changed since the last check.

@@ -21,6 +21,12 @@ use ratatui::prelude::*;
 use crate::app::App;
 
 fn main() -> Result<()> {
+    let headless = std::env::args().any(|a| a == "--headless" || a == "-d");
+
+    if headless {
+        return run_headless();
+    }
+
     // Set up terminal
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
@@ -36,6 +42,17 @@ fn main() -> Result<()> {
     stdout().execute(LeaveAlternateScreen)?;
 
     result
+}
+
+fn run_headless() -> Result<()> {
+    let mut app = App::new()?;
+    loop {
+        if let Err(e) = app.refresh_for_daemon() {
+            eprintln!("claude-tmux daemon: refresh failed: {}", e);
+        }
+        app.tick_status();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {

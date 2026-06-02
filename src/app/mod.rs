@@ -62,6 +62,8 @@ pub struct App {
     pane_content_cache: HashMap<String, String>,
     /// Pane IDs that have been Working while unfocused, used to detect Done transitions
     worked_unfocused: HashSet<String>,
+    /// Pane IDs that have transitioned to Done (persisted across popup sessions)
+    done_panes: HashSet<String>,
     /// Timestamp of the last status tick
     last_status_tick: Instant,
 }
@@ -71,10 +73,13 @@ impl App {
     // Initialization and core lifecycle
     // =========================================================================
 
+    const STATE_FILE: &'static str = "/tmp/claude-tmux-state";
+
     /// Create a new App instance
     pub fn new() -> Result<Self> {
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
+        let (worked_unfocused, done_panes) = Self::read_state_file();
 
         let mut app = Self {
             sessions,
@@ -92,7 +97,8 @@ impl App {
             pr_info: None,
             scroll_state: ScrollState::new(),
             pane_content_cache: HashMap::new(),
-            worked_unfocused: HashSet::new(),
+            worked_unfocused,
+            done_panes,
             last_status_tick: Instant::now(),
         };
 
@@ -158,14 +164,13 @@ impl App {
             }
             if is_focused {
                 self.worked_unfocused.remove(&pane_id);
+                self.done_panes.remove(&pane_id);
             }
 
             let status = if raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.remove(&pane_id) {
+                self.done_panes.insert(pane_id.clone());
                 ClaudeCodeStatus::Done
-            } else if self.sessions[idx].claude_code_status == ClaudeCodeStatus::Done
-                && raw_status == ClaudeCodeStatus::Idle
-                && !is_focused
-            {
+            } else if raw_status == ClaudeCodeStatus::Idle && self.done_panes.contains(&pane_id) && !is_focused {
                 ClaudeCodeStatus::Done
             } else {
                 raw_status
@@ -175,15 +180,60 @@ impl App {
             self.pane_content_cache.insert(pane_id, content);
         }
 
+        self.prune_stale_panes();
         self.write_status_file();
+        self.write_state_file();
+    }
+
+    /// Remove pane IDs from worked_unfocused/done_panes that no longer correspond
+    /// to any known pane. Prevents unbounded growth of the state file when
+    /// sessions are killed.
+    fn prune_stale_panes(&mut self) {
+        let live: HashSet<&str> = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.panes.iter().map(|p| p.id.as_str()))
+            .collect();
+        self.worked_unfocused.retain(|id| live.contains(id.as_str()));
+        self.done_panes.retain(|id| live.contains(id.as_str()));
+    }
+
+    fn read_state_file() -> (HashSet<String>, HashSet<String>) {
+        let mut worked = HashSet::new();
+        let mut done = HashSet::new();
+        if let Ok(content) = std::fs::read_to_string(Self::STATE_FILE) {
+            for line in content.lines() {
+                if let Some(id) = line.strip_prefix("w:") {
+                    worked.insert(id.to_string());
+                } else if let Some(id) = line.strip_prefix("d:") {
+                    done.insert(id.to_string());
+                }
+            }
+        }
+        (worked, done)
+    }
+
+    fn write_state_file(&self) {
+        let mut content = String::new();
+        for id in &self.worked_unfocused {
+            content.push_str("w:");
+            content.push_str(id);
+            content.push('\n');
+        }
+        for id in &self.done_panes {
+            content.push_str("d:");
+            content.push_str(id);
+            content.push('\n');
+        }
+        let _ = std::fs::write(Self::STATE_FILE, content);
     }
 
     /// Write session status counts to a file for external consumers (e.g. status lines).
     fn write_status_file(&self) {
-        let (working, waiting, idle, done) = self.status_counts();
+        let (working, waiting, idle, done, unknown) = self.status_counts();
         let content = format!(
-            "working={}\ndone={}\nidle={}\nwaiting={}\ntotal={}\n",
-            working, done, idle, waiting, self.sessions.len()
+            "working={}\ndone={}\nidle={}\nwaiting={}\nunknown={}\ntotal={}\n",
+            working, done, idle, waiting, unknown, self.sessions.len()
         );
         let _ = std::fs::write("/tmp/claude-tmux-status", content);
     }
@@ -202,10 +252,17 @@ impl App {
         }
     }
 
+    /// Refresh sessions and current attached session for headless daemon mode.
+    /// Re-lists tmux sessions on every call so newly spawned sessions are picked up.
+    pub fn refresh_for_daemon(&mut self) -> Result<()> {
+        self.sessions = Tmux::list_sessions()?;
+        self.current_session = Tmux::current_session()?;
+        Ok(())
+    }
+
     /// Refresh sessions without affecting messages (for use after git operations)
     fn refresh_sessions(&mut self) -> bool {
         self.pane_content_cache.clear();
-        self.worked_unfocused.clear();
         match Tmux::list_sessions() {
             Ok(sessions) => {
                 self.sessions = sessions;
@@ -277,7 +334,9 @@ impl App {
             };
             if let Some(ref pane_id) = self.sessions[idx].claude_code_pane {
                 self.worked_unfocused.remove(pane_id);
+                self.done_panes.remove(pane_id);
             }
+            self.write_state_file();
             let target = self.sessions[idx].switch_target();
             match Tmux::switch_to_session(&target) {
                 Ok(_) => {
@@ -1118,13 +1177,14 @@ impl App {
     // =========================================================================
 
     /// Count sessions by status
-    pub fn status_counts(&self) -> (usize, usize, usize, usize) {
+    pub fn status_counts(&self) -> (usize, usize, usize, usize, usize) {
         use crate::session::ClaudeCodeStatus;
 
         let mut working = 0;
         let mut waiting = 0;
         let mut idle = 0;
         let mut done = 0;
+        let mut unknown = 0;
 
         for session in &self.sessions {
             match session.claude_code_status {
@@ -1132,11 +1192,11 @@ impl App {
                 ClaudeCodeStatus::Done => done += 1,
                 ClaudeCodeStatus::WaitingInput => waiting += 1,
                 ClaudeCodeStatus::Idle => idle += 1,
-                ClaudeCodeStatus::Unknown => {}
+                ClaudeCodeStatus::Unknown => unknown += 1,
             }
         }
 
-        (working, waiting, idle, done)
+        (working, waiting, idle, done, unknown)
     }
 
     // =========================================================================

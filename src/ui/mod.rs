@@ -520,7 +520,7 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let (working, waiting, _idle, done) = app.status_counts();
+    let (working, waiting, _idle, done, _unknown) = app.status_counts();
     let total = app.sessions.len();
 
     let mut parts = vec![format!("{} sessions", total)];
