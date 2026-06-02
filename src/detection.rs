@@ -15,12 +15,18 @@ pub fn content_above_status_bar(content: &str) -> &str {
     content
 }
 
+fn has_input_prompt(content: &str) -> bool {
+    content.contains("[y/n]")
+        || content.contains("[Y/n]")
+        || content.contains("shift+tab to approve")
+}
+
 /// Detect Claude Code status when content has NOT changed since the last check.
 ///
 /// Working is determined externally by content-change detection. This function
 /// only distinguishes Idle, WaitingInput, and Unknown from static content.
 pub fn detect_static_status(content: &str) -> ClaudeCodeStatus {
-    if content.contains("[y/n]") || content.contains("[Y/n]") {
+    if has_input_prompt(content) {
         return ClaudeCodeStatus::WaitingInput;
     }
     if has_input_field(content) {
@@ -35,6 +41,10 @@ pub fn detect_static_status(content: &str) -> ClaudeCodeStatus {
 /// Prefer content-change detection (see `App::tick_status`) for reliable
 /// Working vs Idle discrimination.
 pub fn detect_status(content: &str) -> ClaudeCodeStatus {
+    if has_input_prompt(content) {
+        return ClaudeCodeStatus::WaitingInput;
+    }
+
     if has_input_field(content) {
         if content.contains("ctrl+c") && content.contains("to interrupt") {
             return ClaudeCodeStatus::Working;
@@ -44,10 +54,6 @@ pub fn detect_status(content: &str) -> ClaudeCodeStatus {
 
     if content.contains("ctrl+c") && content.contains("to interrupt") {
         return ClaudeCodeStatus::Working;
-    }
-
-    if content.contains("[y/n]") || content.contains("[Y/n]") {
-        return ClaudeCodeStatus::WaitingInput;
     }
 
     ClaudeCodeStatus::Unknown
@@ -98,6 +104,13 @@ mod tests {
     fn test_waiting_input() {
         let content = "Delete files? [y/n]";
         assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn test_waiting_input_plan_approval() {
+        let content = "Would you like to proceed?\n\n❯ 1. Yes, and use auto mode\n  2. Yes, manually approve edits\n     shift+tab to approve with this feedback";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
     }
 
     #[test]
