@@ -82,7 +82,7 @@ impl App {
     pub fn new(headless: bool) -> Result<Self> {
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
-        let worked_unfocused = Self::read_state_file();
+        let (worked_unfocused, done_panes) = Self::read_state_file();
 
         let mut app = Self {
             sessions,
@@ -101,13 +101,29 @@ impl App {
             scroll_state: ScrollState::new(),
             pane_content_cache: HashMap::new(),
             worked_unfocused,
-            done_panes: HashSet::new(),
+            done_panes,
             last_status_tick: Instant::now(),
             writes_status_file: headless,
         };
 
+        app.apply_persisted_done();
         app.update_preview();
         Ok(app)
+    }
+
+    /// Apply persisted Done state to sessions on startup. These panes were
+    /// verified as Done in a previous session, so they're safe to show
+    /// immediately without waiting for content-diff confirmation.
+    fn apply_persisted_done(&mut self) {
+        for session in &mut self.sessions {
+            if let Some(ref pane_id) = session.claude_code_pane {
+                if self.done_panes.contains(pane_id)
+                    && session.claude_code_status == ClaudeCodeStatus::Idle
+                {
+                    session.claude_code_status = ClaudeCodeStatus::Done;
+                }
+            }
+        }
     }
 
     /// Update the preview content for the currently selected session
@@ -162,7 +178,11 @@ impl App {
                 None => detect_status(&content),
             };
 
-            let is_focused = self.sessions[idx].attached;
+            // In daemon mode, the attached session is directly visible to
+            // the user — no need to track Done for it. In popup mode, the
+            // user is viewing the popup overlay, not the session, so nothing
+            // should be considered focused.
+            let is_focused = self.writes_status_file && self.sessions[idx].attached;
 
             if raw_status == ClaudeCodeStatus::Working && !is_focused {
                 self.worked_unfocused.insert(pane_id.clone());
@@ -176,7 +196,7 @@ impl App {
             // Idle detection is unreliable — suppress the worked_unfocused→Done
             // transition to avoid a false Done flash. Working/WaitingInput are
             // still detected correctly from static content.
-            let status = if first_observation && raw_status == ClaudeCodeStatus::Idle {
+            let status = if first_observation && raw_status == ClaudeCodeStatus::Idle && !self.done_panes.contains(&pane_id) {
                 ClaudeCodeStatus::Idle
             } else if !first_observation && raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.remove(&pane_id) {
                 self.done_panes.insert(pane_id.clone());
@@ -211,22 +231,30 @@ impl App {
         self.done_panes.retain(|id| live.contains(id.as_str()));
     }
 
-    fn read_state_file() -> HashSet<String> {
+    fn read_state_file() -> (HashSet<String>, HashSet<String>) {
         let mut worked = HashSet::new();
+        let mut done = HashSet::new();
         if let Ok(content) = std::fs::read_to_string(Self::STATE_FILE) {
             for line in content.lines() {
                 if let Some(id) = line.strip_prefix("w:") {
                     worked.insert(id.to_string());
+                } else if let Some(id) = line.strip_prefix("d:") {
+                    done.insert(id.to_string());
                 }
             }
         }
-        worked
+        (worked, done)
     }
 
     fn write_state_file(&self) {
         let mut content = String::new();
         for id in &self.worked_unfocused {
             content.push_str("w:");
+            content.push_str(id);
+            content.push('\n');
+        }
+        for id in &self.done_panes {
+            content.push_str("d:");
             content.push_str(id);
             content.push('\n');
         }
