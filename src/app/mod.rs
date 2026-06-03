@@ -18,6 +18,7 @@ use crate::detection::{content_above_status_bar, detect_static_status, detect_st
 use crate::git::{self, GitContext, PullRequestInfo};
 use crate::scroll_state::ScrollState;
 use crate::session::{ClaudeCodeStatus, Session};
+use crate::settings::Settings;
 use crate::tmux::Tmux;
 
 // Re-export types that are part of the public API
@@ -68,6 +69,8 @@ pub struct App {
     last_status_tick: Instant,
     /// Whether this instance owns the status file (only headless daemon should)
     writes_status_file: bool,
+    /// Interval between status detection ticks
+    status_interval: Duration,
 }
 
 impl App {
@@ -80,6 +83,7 @@ impl App {
     /// Create a new App instance. When `headless` is true, this instance
     /// writes the status file for external consumers (statusline script).
     pub fn new(headless: bool) -> Result<Self> {
+        let settings = Settings::load();
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
         let (worked_unfocused, done_panes) = Self::read_state_file();
@@ -104,6 +108,7 @@ impl App {
             done_panes,
             last_status_tick: Instant::now() - Duration::from_secs(1),
             writes_status_file: headless,
+            status_interval: settings.status_interval,
         };
 
         app.apply_persisted_done();
@@ -151,8 +156,7 @@ impl App {
     /// one: if the content changed the session is Working; if it is the same
     /// we fall back to static text inspection for Idle / WaitingInput / Unknown.
     pub fn tick_status(&mut self) {
-        const STATUS_INTERVAL: Duration = Duration::from_millis(500);
-        if self.last_status_tick.elapsed() < STATUS_INTERVAL {
+        if self.last_status_tick.elapsed() < self.status_interval {
             return;
         }
         self.last_status_tick = Instant::now();
@@ -165,6 +169,8 @@ impl App {
             .filter_map(|(i, s)| s.claude_code_pane.as_ref().map(|id| (i, id.clone())))
             .collect();
 
+        let mut had_first_observation = false;
+
         for (idx, pane_id) in targets {
             let Ok(content) = Tmux::capture_pane(&pane_id, 15, true) else {
                 continue;
@@ -172,6 +178,7 @@ impl App {
 
             let comparable = content_above_status_bar(&content);
             let first_observation = !self.pane_content_cache.contains_key(&pane_id);
+            had_first_observation |= first_observation;
             let raw_status = match self.pane_content_cache.get(&pane_id) {
                 Some(prev) if content_above_status_bar(prev) != comparable => ClaudeCodeStatus::Working,
                 Some(_) => detect_static_status(&content),
@@ -209,6 +216,10 @@ impl App {
 
             self.sessions[idx].claude_code_status = status;
             self.pane_content_cache.insert(pane_id, content);
+        }
+
+        if had_first_observation {
+            self.last_status_tick -= self.status_interval.saturating_sub(Duration::from_millis(20));
         }
 
         self.prune_stale_panes();

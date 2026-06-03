@@ -5,6 +5,7 @@ mod git;
 mod input;
 mod scroll_state;
 mod session;
+mod settings;
 mod tmux;
 mod ui;
 
@@ -19,6 +20,7 @@ use crossterm::{
 use ratatui::prelude::*;
 
 use crate::app::App;
+use crate::settings::Settings;
 
 fn main() -> Result<()> {
     let headless = std::env::args().any(|a| a == "--headless" || a == "-d");
@@ -45,13 +47,14 @@ fn main() -> Result<()> {
 }
 
 fn run_headless() -> Result<()> {
+    let sleep_interval = Settings::load().status_interval;
     let mut app = App::new(true)?;
     loop {
         if let Err(e) = app.refresh_for_daemon() {
             eprintln!("claude-tmux daemon: refresh failed: {}", e);
         }
         app.tick_status();
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(sleep_interval);
     }
 }
 
