@@ -31,7 +31,13 @@ pub fn detect_static_status(content: &str) -> ClaudeCodeStatus {
         return ClaudeCodeStatus::WaitingInput;
     }
     if has_input_field(content) {
+        if content.contains("ctrl+c") && content.contains("to interrupt") {
+            return ClaudeCodeStatus::Working;
+        }
         return ClaudeCodeStatus::Idle;
+    }
+    if content.contains("ctrl+c") && content.contains("to interrupt") {
+        return ClaudeCodeStatus::Working;
     }
     ClaudeCodeStatus::Unknown
 }

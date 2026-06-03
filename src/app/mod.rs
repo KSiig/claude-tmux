@@ -66,6 +66,8 @@ pub struct App {
     done_panes: HashSet<String>,
     /// Timestamp of the last status tick
     last_status_tick: Instant,
+    /// Whether this instance owns the status file (only headless daemon should)
+    writes_status_file: bool,
 }
 
 impl App {
@@ -75,11 +77,12 @@ impl App {
 
     const STATE_FILE: &'static str = "/tmp/claude-tmux-state";
 
-    /// Create a new App instance
-    pub fn new() -> Result<Self> {
+    /// Create a new App instance. When `headless` is true, this instance
+    /// writes the status file for external consumers (statusline script).
+    pub fn new(headless: bool) -> Result<Self> {
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
-        let (worked_unfocused, done_panes) = Self::read_state_file();
+        let worked_unfocused = Self::read_state_file();
 
         let mut app = Self {
             sessions,
@@ -98,8 +101,9 @@ impl App {
             scroll_state: ScrollState::new(),
             pane_content_cache: HashMap::new(),
             worked_unfocused,
-            done_panes,
+            done_panes: HashSet::new(),
             last_status_tick: Instant::now(),
+            writes_status_file: headless,
         };
 
         app.update_preview();
@@ -151,6 +155,7 @@ impl App {
             };
 
             let comparable = content_above_status_bar(&content);
+            let first_observation = !self.pane_content_cache.contains_key(&pane_id);
             let raw_status = match self.pane_content_cache.get(&pane_id) {
                 Some(prev) if content_above_status_bar(prev) != comparable => ClaudeCodeStatus::Working,
                 Some(_) => detect_static_status(&content),
@@ -167,7 +172,13 @@ impl App {
                 self.done_panes.remove(&pane_id);
             }
 
-            let status = if raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.remove(&pane_id) {
+            // On the first observation we don't have a content diff yet, so
+            // Idle detection is unreliable — suppress the worked_unfocused→Done
+            // transition to avoid a false Done flash. Working/WaitingInput are
+            // still detected correctly from static content.
+            let status = if first_observation && raw_status == ClaudeCodeStatus::Idle {
+                ClaudeCodeStatus::Idle
+            } else if !first_observation && raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.remove(&pane_id) {
                 self.done_panes.insert(pane_id.clone());
                 ClaudeCodeStatus::Done
             } else if raw_status == ClaudeCodeStatus::Idle && self.done_panes.contains(&pane_id) && !is_focused {
@@ -181,8 +192,10 @@ impl App {
         }
 
         self.prune_stale_panes();
-        self.write_status_file();
         self.write_state_file();
+        if self.writes_status_file {
+            self.write_status_file();
+        }
     }
 
     /// Remove pane IDs from worked_unfocused/done_panes that no longer correspond
@@ -198,30 +211,22 @@ impl App {
         self.done_panes.retain(|id| live.contains(id.as_str()));
     }
 
-    fn read_state_file() -> (HashSet<String>, HashSet<String>) {
+    fn read_state_file() -> HashSet<String> {
         let mut worked = HashSet::new();
-        let mut done = HashSet::new();
         if let Ok(content) = std::fs::read_to_string(Self::STATE_FILE) {
             for line in content.lines() {
                 if let Some(id) = line.strip_prefix("w:") {
                     worked.insert(id.to_string());
-                } else if let Some(id) = line.strip_prefix("d:") {
-                    done.insert(id.to_string());
                 }
             }
         }
-        (worked, done)
+        worked
     }
 
     fn write_state_file(&self) {
         let mut content = String::new();
         for id in &self.worked_unfocused {
             content.push_str("w:");
-            content.push_str(id);
-            content.push('\n');
-        }
-        for id in &self.done_panes {
-            content.push_str("d:");
             content.push_str(id);
             content.push('\n');
         }
