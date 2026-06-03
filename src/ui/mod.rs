@@ -148,9 +148,11 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
     // (items building borrows app immutably, scroll_state needs mutable access)
     let mut scroll_state = std::mem::take(&mut app.scroll_state);
 
-    let filtered = app.filtered_sessions();
+    let groups = app.grouped_filtered_sessions();
 
-    if filtered.is_empty() {
+    let all_sessions: Vec<_> = groups.iter().flat_map(|g| &g.sessions).copied().collect();
+
+    if all_sessions.is_empty() {
         let empty_msg = if app.filter.is_empty() {
             "No tmux sessions found. Press 'n' to create one."
         } else {
@@ -160,13 +162,11 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
         frame.render_widget(paragraph, area);
-        // Put scroll_state back before returning
         app.scroll_state = scroll_state;
         return;
     }
 
-    // Calculate column widths
-    let display_names: Vec<String> = filtered.iter().map(|s| s.display_name()).collect();
+    let display_names: Vec<String> = all_sessions.iter().map(|s| s.display_name()).collect();
     let max_name_len = display_names
         .iter()
         .map(|n| n.as_str().width())
@@ -175,128 +175,91 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         .max(10);
 
     let mut items: Vec<ListItem> = Vec::new();
+    let mut session_idx = 0;
 
-    for (i, session) in filtered.iter().enumerate() {
-        let is_selected = i == app.selected;
-        let is_current = app
-            .current_session
-            .as_ref()
-            .is_some_and(|c| c == &session.name);
+    for group in &groups {
+        if let Some(ref label) = group.label {
+            let header_line = render_group_header(label, area.width);
+            items.push(ListItem::new(header_line));
+        }
 
-        // Show ▾ when action menu is open for this session, ▸ when selected but collapsed
-        let is_expanded = is_selected && matches!(app.mode, Mode::ActionMenu);
-        let marker = if is_selected {
-            if is_expanded {
-                "▾"
-            } else {
-                "▸"
-            }
-        } else {
-            " "
-        };
-        let status = &session.claude_code_status;
+        for session in &group.sessions {
+            let i = session_idx;
+            session_idx += 1;
 
-        // Use brighter colors when selected so text is readable on dark background
-        let status_color = match (status, is_selected) {
-            (ClaudeCodeStatus::Working, _) => Color::Green,
-            (ClaudeCodeStatus::Done, _) => Color::Cyan,
-            (ClaudeCodeStatus::WaitingInput, _) => Color::Yellow,
-            (ClaudeCodeStatus::Idle, true) => Color::White,
-            (ClaudeCodeStatus::Idle, false) => Color::DarkGray,
-            (ClaudeCodeStatus::Unknown, true) => Color::Gray,
-            (ClaudeCodeStatus::Unknown, false) => Color::DarkGray,
-        };
+            let is_selected = i == app.selected;
+            let is_current = app
+                .current_session
+                .as_ref()
+                .is_some_and(|c| c == &session.name);
 
-        let path_color = if is_selected {
-            Color::White
-        } else {
-            Color::DarkGray
-        };
-
-        let name_style = if is_current {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-
-        // Build git info spans
-        let git_spans = if let Some(ref git) = session.git_context {
-            let (open, close) = if git.is_worktree {
-                ("[", "]")
-            } else {
-                ("(", ")")
-            };
-            let bracket_color = if git.is_worktree {
-                Color::Magenta
-            } else {
-                Color::Cyan
-            };
-
-            // Show status indicators: + for staged, * for unstaged
-            let mut status_str = String::new();
-            if git.has_staged {
-                status_str.push('+');
-            }
-            if git.has_unstaged {
-                status_str.push('*');
-            }
-            let status_spans = if !status_str.is_empty() {
-                let color = if git.has_staged && !git.has_unstaged {
-                    Color::Green // Only staged = green
+            let is_expanded = is_selected && matches!(app.mode, Mode::ActionMenu);
+            let marker = if is_selected {
+                if is_expanded {
+                    "▾"
                 } else {
-                    Color::Yellow // Mixed state = yellow
-                };
-                vec![Span::styled(
-                    format!(" {}", status_str),
-                    Style::default().fg(color),
-                )]
+                    "▸"
+                }
             } else {
-                vec![]
+                " "
+            };
+            let status = &session.claude_code_status;
+
+            let status_color = match (status, is_selected) {
+                (ClaudeCodeStatus::Working, _) => Color::Green,
+                (ClaudeCodeStatus::Done, _) => Color::Cyan,
+                (ClaudeCodeStatus::WaitingInput, _) => Color::Yellow,
+                (ClaudeCodeStatus::Idle, true) => Color::White,
+                (ClaudeCodeStatus::Idle, false) => Color::DarkGray,
+                (ClaudeCodeStatus::Unknown, true) => Color::Gray,
+                (ClaudeCodeStatus::Unknown, false) => Color::DarkGray,
             };
 
-            let mut spans = vec![
+            let path_color = if is_selected {
+                Color::White
+            } else {
+                Color::DarkGray
+            };
+
+            let name_style = if is_current {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let git_spans = build_git_spans(session);
+
+            let mut line_spans = vec![
+                Span::raw(format!(" {} ", marker)),
+                Span::styled(
+                    format!("{:<width$}", display_names[i], width = max_name_len),
+                    name_style,
+                ),
+                Span::raw("  "),
+                Span::styled(status.symbol(), Style::default().fg(status_color)),
                 Span::raw(" "),
-                Span::styled(open, Style::default().fg(bracket_color)),
-                Span::styled(&git.branch, Style::default().fg(Color::Cyan)),
-                Span::styled(close, Style::default().fg(bracket_color)),
+                Span::styled(
+                    format!("{:<8}", status.label()),
+                    Style::default().fg(status_color),
+                ),
+                Span::raw("  "),
+                Span::styled(session.display_path(), Style::default().fg(path_color)),
             ];
-            spans.extend(status_spans);
-            spans
-        } else {
-            vec![]
-        };
+            line_spans.extend(git_spans);
 
-        let mut line_spans = vec![
-            Span::raw(format!(" {} ", marker)),
-            Span::styled(
-                format!("{:<width$}", display_names[i], width = max_name_len),
-                name_style,
-            ),
-            Span::raw("  "),
-            Span::styled(status.symbol(), Style::default().fg(status_color)),
-            Span::raw(" "),
-            Span::styled(
-                format!("{:<8}", status.label()),
-                Style::default().fg(status_color),
-            ),
-            Span::raw("  "),
-            Span::styled(session.display_path(), Style::default().fg(path_color)),
-        ];
-        line_spans.extend(git_spans);
+            let line = Line::from(line_spans);
 
-        let line = Line::from(line_spans);
+            let style = if is_selected {
+                Style::default().bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
 
-        let style = if is_selected {
-            Style::default().bg(Color::DarkGray)
-        } else {
-            Style::default()
-        };
+            items.push(ListItem::new(line).style(style));
 
-        items.push(ListItem::new(line).style(style));
-
-        // Show expanded content when in action menu mode for this session
-        if is_expanded {
-            render_expanded_session_content(app, session, &mut items);
+            if is_expanded {
+                render_expanded_session_content(app, session, &mut items);
+            }
         }
     }
 
@@ -313,6 +276,73 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Put scroll_state back into app (list borrows are now released)
     app.scroll_state = scroll_state;
+}
+
+fn render_group_header<'a>(label: &str, width: u16) -> Line<'a> {
+    let dashes_left = "── ";
+    let dashes_right_len = (width as usize)
+        .saturating_sub(dashes_left.len() + label.len() + 2); // +2 for " ─…"
+    let dashes_right = "─".repeat(dashes_right_len.max(1));
+    Line::from(vec![
+        Span::styled(dashes_left, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            label.to_string(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", dashes_right),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])
+}
+
+fn build_git_spans<'a>(session: &'a crate::session::Session) -> Vec<Span<'a>> {
+    let Some(ref git) = session.git_context else {
+        return vec![];
+    };
+
+    let (open, close) = if git.is_worktree {
+        ("[", "]")
+    } else {
+        ("(", ")")
+    };
+    let bracket_color = if git.is_worktree {
+        Color::Magenta
+    } else {
+        Color::Cyan
+    };
+
+    let mut status_str = String::new();
+    if git.has_staged {
+        status_str.push('+');
+    }
+    if git.has_unstaged {
+        status_str.push('*');
+    }
+    let status_spans = if !status_str.is_empty() {
+        let color = if git.has_staged && !git.has_unstaged {
+            Color::Green
+        } else {
+            Color::Yellow
+        };
+        vec![Span::styled(
+            format!(" {}", status_str),
+            Style::default().fg(color),
+        )]
+    } else {
+        vec![]
+    };
+
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled(open, Style::default().fg(bracket_color)),
+        Span::styled(&git.branch, Style::default().fg(Color::Cyan)),
+        Span::styled(close, Style::default().fg(bracket_color)),
+    ];
+    spans.extend(status_spans);
+    spans
 }
 
 /// Render the expanded content for a session in action menu mode

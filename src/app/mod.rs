@@ -21,6 +21,8 @@ use crate::session::{ClaudeCodeStatus, Session};
 use crate::settings::Settings;
 use crate::tmux::Tmux;
 
+mod grouping;
+
 // Re-export types that are part of the public API
 pub use mode::{
     CreatePullRequestField, Mode, NewSessionField, NewWorktreeField, SessionAction,
@@ -344,6 +346,36 @@ impl App {
         };
         sessions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         sessions
+    }
+
+    /// Get filtered sessions grouped by shared name prefix.
+    /// Multi-member groups get a label (rendered as a header); singletons do not.
+    pub fn grouped_filtered_sessions(&self) -> Vec<grouping::SessionGroup<'_>> {
+        grouping::group_sessions(self.filtered_sessions())
+    }
+
+    /// Count how many group headers appear before the selected session index.
+    fn headers_before(&self, selected: usize) -> usize {
+        let groups = self.grouped_filtered_sessions();
+        let mut session_idx = 0;
+        let mut headers = 0;
+        for group in &groups {
+            if session_idx > selected {
+                break;
+            }
+            if group.has_header() {
+                headers += 1;
+            }
+            session_idx += group.sessions.len();
+        }
+        headers
+    }
+
+    fn total_headers(&self) -> usize {
+        self.grouped_filtered_sessions()
+            .iter()
+            .filter(|g| g.has_header())
+            .count()
     }
 
     /// Get the currently selected session
@@ -1494,42 +1526,29 @@ impl App {
             return 0;
         }
 
+        let header_offset = self.headers_before(self.selected);
+
         match self.mode {
             Mode::ActionMenu => {
-                // Count items before selected session (1 row each)
-                let mut index = self.selected;
+                let mut index = self.selected + header_offset;
+                index += 1; // selected session row itself
+                index += 1; // metadata row
 
-                // Add 1 for the selected session row itself
-                index += 1;
-
-                // Add 1 for metadata row (always present when expanded)
-                index += 1;
-
-                // Add 1 for git info row if present
                 if self
                     .selected_session()
                     .is_some_and(|s| s.git_context.is_some())
                 {
                     index += 1;
-
-                    // Add 1 for PR info row if present
                     if self.pr_info.is_some() {
                         index += 1;
                     }
                 }
 
-                // Add 1 for separator
-                index += 1;
-
-                // Add selected_action to get to the highlighted action
+                index += 1; // separator
                 index += self.selected_action;
-
                 index
             }
-            _ => {
-                // In non-ActionMenu modes, just the session index
-                self.selected
-            }
+            _ => self.selected + header_offset,
         }
     }
 
@@ -1542,18 +1561,12 @@ impl App {
             return 0;
         }
 
+        let header_count = self.total_headers();
+
         match self.mode {
             Mode::ActionMenu => {
-                // Base: one row per session
-                let mut total = filtered_count;
+                let mut total = filtered_count + header_count;
 
-                // Add expanded content for selected session:
-                // - 1 metadata row
-                // - 1 git info row (if git context)
-                // - 1 PR info row (if pr_info)
-                // - 1 separator
-                // - N action rows
-                // - 1 end separator
                 total += 1; // metadata row
 
                 if self
@@ -1572,7 +1585,7 @@ impl App {
 
                 total
             }
-            _ => filtered_count,
+            _ => filtered_count + header_count,
         }
     }
 }
