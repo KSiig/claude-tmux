@@ -45,7 +45,7 @@ fn main() -> Result<()> {
 }
 
 fn run_headless() -> Result<()> {
-    let mut app = App::new()?;
+    let mut app = App::new(true)?;
     loop {
         if let Err(e) = app.refresh_for_daemon() {
             eprintln!("claude-tmux daemon: refresh failed: {}", e);
@@ -56,7 +56,7 @@ fn run_headless() -> Result<()> {
 }
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    let mut app = App::new()?;
+    let mut app = App::new(false)?;
 
     loop {
         // Draw the UI

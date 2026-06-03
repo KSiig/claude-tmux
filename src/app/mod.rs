@@ -66,6 +66,8 @@ pub struct App {
     done_panes: HashSet<String>,
     /// Timestamp of the last status tick
     last_status_tick: Instant,
+    /// Whether this instance owns the status file (only headless daemon should)
+    writes_status_file: bool,
 }
 
 impl App {
@@ -75,8 +77,9 @@ impl App {
 
     const STATE_FILE: &'static str = "/tmp/claude-tmux-state";
 
-    /// Create a new App instance
-    pub fn new() -> Result<Self> {
+    /// Create a new App instance. When `headless` is true, this instance
+    /// writes the status file for external consumers (statusline script).
+    pub fn new(headless: bool) -> Result<Self> {
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
         let (worked_unfocused, done_panes) = Self::read_state_file();
@@ -100,10 +103,27 @@ impl App {
             worked_unfocused,
             done_panes,
             last_status_tick: Instant::now() - Duration::from_secs(1),
+            writes_status_file: headless,
         };
 
+        app.apply_persisted_done();
         app.update_preview();
         Ok(app)
+    }
+
+    /// Apply persisted Done state to sessions on startup. These panes were
+    /// verified as Done in a previous session, so they're safe to show
+    /// immediately without waiting for content-diff confirmation.
+    fn apply_persisted_done(&mut self) {
+        for session in &mut self.sessions {
+            if let Some(ref pane_id) = session.claude_code_pane {
+                if self.done_panes.contains(pane_id)
+                    && session.claude_code_status == ClaudeCodeStatus::Idle
+                {
+                    session.claude_code_status = ClaudeCodeStatus::Done;
+                }
+            }
+        }
     }
 
     /// Update the preview content for the currently selected session
@@ -151,13 +171,18 @@ impl App {
             };
 
             let comparable = content_above_status_bar(&content);
+            let first_observation = !self.pane_content_cache.contains_key(&pane_id);
             let raw_status = match self.pane_content_cache.get(&pane_id) {
                 Some(prev) if content_above_status_bar(prev) != comparable => ClaudeCodeStatus::Working,
                 Some(_) => detect_static_status(&content),
                 None => detect_status(&content),
             };
 
-            let is_focused = self.sessions[idx].attached;
+            // In daemon mode, the attached session is directly visible to
+            // the user — no need to track Done for it. In popup mode, the
+            // user is viewing the popup overlay, not the session, so nothing
+            // should be considered focused.
+            let is_focused = self.writes_status_file && self.sessions[idx].attached;
 
             if raw_status == ClaudeCodeStatus::Working && !is_focused {
                 self.worked_unfocused.insert(pane_id.clone());
@@ -167,7 +192,13 @@ impl App {
                 self.done_panes.remove(&pane_id);
             }
 
-            let status = if raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.remove(&pane_id) {
+            // On the first observation we don't have a content diff yet, so
+            // Idle detection is unreliable — suppress the worked_unfocused→Done
+            // transition to avoid a false Done flash. Working/WaitingInput are
+            // still detected correctly from static content.
+            let status = if first_observation && raw_status == ClaudeCodeStatus::Idle && !self.done_panes.contains(&pane_id) {
+                ClaudeCodeStatus::Idle
+            } else if !first_observation && raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.remove(&pane_id) {
                 self.done_panes.insert(pane_id.clone());
                 ClaudeCodeStatus::Done
             } else if raw_status == ClaudeCodeStatus::Idle && self.done_panes.contains(&pane_id) && !is_focused {
@@ -181,8 +212,10 @@ impl App {
         }
 
         self.prune_stale_panes();
-        self.write_status_file();
         self.write_state_file();
+        if self.writes_status_file {
+            self.write_status_file();
+        }
     }
 
     /// Remove pane IDs from worked_unfocused/done_panes that no longer correspond
