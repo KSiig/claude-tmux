@@ -1,3 +1,6 @@
 {
-  "status_interval_ms": 500
+  "status_interval_ms": 500,
+  "show_git_info": true,
+  "session_status_labels": true,
+  "grouping": false
 }

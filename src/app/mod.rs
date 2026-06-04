@@ -77,6 +77,20 @@ pub struct App {
     pub group_titles: HashMap<String, String>,
     /// Whether to show git branch and dirty-star in the session list
     pub show_git_info: bool,
+    /// Whether to show text labels next to session status icons
+    pub session_status_labels: bool,
+    /// Whether session grouping by shared name prefix is enabled
+    pub grouping_enabled: bool,
+    /// Whether to show task titles (from titles.json / API)
+    pub task_show_titles: bool,
+    /// Whether to show task status icons
+    pub task_show_status: bool,
+    /// Whether to show text labels next to task status icons
+    pub task_status_labels: bool,
+    /// Issue prefix for task identifier extraction (e.g. "VEL")
+    pub task_issue_prefix: Option<String>,
+    /// Cached Linear issue statuses (loaded from /tmp/claude-tmux-linear.json)
+    pub linear_statuses: HashMap<String, crate::linear::IssueStatus>,
 }
 
 impl App {
@@ -93,6 +107,28 @@ impl App {
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
         let (worked_unfocused, done_panes) = Self::read_state_file();
+
+        let (task_show_titles, task_show_status, task_status_labels, task_issue_prefix) =
+            match &settings.task_integration {
+                Some(t) => (
+                    t.show_titles,
+                    t.show_status,
+                    t.status_labels,
+                    t.issue_prefix.clone(),
+                ),
+                None => (false, false, false, None),
+            };
+
+        let group_titles = if task_show_titles {
+            grouping::load_titles()
+        } else {
+            HashMap::new()
+        };
+        let linear_statuses = if task_show_status {
+            crate::linear::load_cached()
+        } else {
+            HashMap::new()
+        };
 
         let mut app = Self {
             sessions,
@@ -115,8 +151,15 @@ impl App {
             last_status_tick: Instant::now() - Duration::from_secs(1),
             writes_status_file: headless,
             status_interval: settings.status_interval,
-            group_titles: grouping::load_titles(),
+            group_titles,
             show_git_info: settings.show_git_info,
+            session_status_labels: settings.session_status_labels,
+            grouping_enabled: settings.grouping,
+            task_show_titles,
+            task_show_status,
+            task_status_labels,
+            task_issue_prefix,
+            linear_statuses,
         };
 
         app.apply_persisted_done();
@@ -299,7 +342,12 @@ impl App {
     /// Refresh the session list (shows "Refreshed" message)
     pub fn refresh(&mut self) {
         self.clear_messages();
-        self.group_titles = grouping::load_titles();
+        if self.task_show_titles {
+            self.group_titles = grouping::load_titles();
+        }
+        if self.task_show_status {
+            self.linear_statuses = crate::linear::load_cached();
+        }
         if self.refresh_sessions() {
             self.message = Some("Refreshed".to_string());
         }
@@ -311,6 +359,10 @@ impl App {
         self.sessions = Tmux::list_sessions()?;
         self.current_session = Tmux::current_session()?;
         Ok(())
+    }
+
+    pub fn session_names(&self) -> Vec<String> {
+        self.sessions.iter().map(|s| s.name.clone()).collect()
     }
 
     /// Refresh sessions without affecting messages (for use after git operations)
@@ -358,6 +410,17 @@ impl App {
     /// Get filtered sessions grouped by shared name prefix.
     /// Multi-member groups get a label (rendered as a header); singletons do not.
     pub fn grouped_filtered_sessions(&self) -> Vec<grouping::SessionGroup<'_>> {
+        if !self.grouping_enabled {
+            return self
+                .filtered_sessions()
+                .into_iter()
+                .map(|s| grouping::SessionGroup {
+                    label: None,
+                    title: None,
+                    sessions: vec![s],
+                })
+                .collect();
+        }
         grouping::group_sessions(self.filtered_sessions(), &self.group_titles)
     }
 

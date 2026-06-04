@@ -30,7 +30,6 @@ impl ClaudeCodeStatus {
         }
     }
 
-    /// Returns the display label for this status
     pub fn label(&self) -> &'static str {
         match self {
             ClaudeCodeStatus::Idle => "idle",

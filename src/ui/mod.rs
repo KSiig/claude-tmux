@@ -106,7 +106,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             dialogs::render_create_pr_dialog(frame, title, body, base_branch, *field);
         }
         Mode::Help => {
-            help::render_help(frame);
+            help::render_help(frame, app.task_show_status);
         }
         Mode::Normal | Mode::ActionMenu => {}
     }
@@ -179,8 +179,18 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     for group in &groups {
         if let Some(ref label) = group.label {
+            let linear_status = if app.task_show_status {
+                app.linear_statuses.get(label)
+            } else {
+                None
+            };
+            let title = if app.task_show_titles {
+                group.title.as_deref()
+            } else {
+                None
+            };
             let header_line =
-                render_group_header(label, group.title.as_deref(), area.width);
+                render_group_header(label, title, linear_status, app.task_status_labels, area.width);
             items.push(ListItem::new(header_line));
         }
 
@@ -229,7 +239,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             };
 
             let is_child = group.label.as_deref().is_some_and(|l| session.name != l);
-            let inline_title = if is_child {
+            let inline_title = if app.task_show_titles && is_child {
                 app.group_titles.get(&session.name).map(|t| t.as_str())
             } else {
                 None
@@ -245,22 +255,43 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 Color::DarkGray
             };
 
+            let sub_issue_status = if app.task_show_status {
+                crate::linear::session_sub_issue_id(
+                    &session.name,
+                    app.task_issue_prefix.as_deref(),
+                )
+                .and_then(|id| app.linear_statuses.get(&id))
+            } else {
+                None
+            };
+
             let mut line_spans = vec![
                 Span::raw(format!(" {} ", marker)),
                 Span::styled(
                     format!("{:<width$}", display_names[i], width = max_name_len),
                     name_style,
                 ),
-                Span::raw("  "),
-                Span::styled(status.symbol(), Style::default().fg(status_color)),
                 Span::raw(" "),
-                Span::styled(
+                Span::styled(status.symbol(), Style::default().fg(status_color)),
+            ];
+            if app.session_status_labels {
+                line_spans.push(Span::raw(" "));
+                line_spans.push(Span::styled(
                     format!("{:<8}", status.label()),
                     Style::default().fg(status_color),
-                ),
-                Span::raw("  "),
-                Span::styled(detail, Style::default().fg(detail_color)),
-            ];
+                ));
+            }
+            line_spans.push(Span::raw("  "));
+            if let Some(s) = sub_issue_status {
+                let color = linear_state_color(&s.state_type);
+                let text = if app.task_status_labels {
+                    format!("{} {} ", linear_state_symbol(&s.state_type), s.state_name)
+                } else {
+                    format!("{} ", linear_state_symbol(&s.state_type))
+                };
+                line_spans.push(Span::styled(text, Style::default().fg(color)));
+            }
+            line_spans.push(Span::styled(detail, Style::default().fg(detail_color)));
             line_spans.extend(git_spans);
 
             let line = Line::from(line_spans);
@@ -294,24 +325,42 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
     app.scroll_state = scroll_state;
 }
 
-fn render_group_header<'a>(label: &str, title: Option<&str>, width: u16) -> Line<'a> {
+fn render_group_header<'a>(
+    label: &str,
+    title: Option<&str>,
+    linear_status: Option<&crate::linear::IssueStatus>,
+    status_labels: bool,
+    width: u16,
+) -> Line<'a> {
     let prefix = "── ";
     let title_part = match title {
         Some(t) => format!(" — {}", t),
         None => String::new(),
     };
-    let used = prefix.len() + label.len() + title_part.len() + 2;
+    let status_text = match linear_status {
+        Some(s) if status_labels => format!("{} {} ", linear_state_symbol(&s.state_type), s.state_name),
+        Some(s) => format!("{} ", linear_state_symbol(&s.state_type)),
+        None => String::new(),
+    };
+    let used = prefix.len() + status_text.len() + label.len() + title_part.len() + 2;
     let dashes_right = "─".repeat((width as usize).saturating_sub(used).max(1));
 
     let mut spans = vec![
         Span::styled(prefix, Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            label.to_string(),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
     ];
+    if let Some(s) = linear_status {
+        let color = linear_state_color(&s.state_type);
+        spans.push(Span::styled(
+            status_text,
+            Style::default().fg(color),
+        ));
+    }
+    spans.push(Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
     if let Some(t) = title {
         spans.push(Span::styled(
             format!(" — {}", t),
@@ -323,6 +372,28 @@ fn render_group_header<'a>(label: &str, title: Option<&str>, width: u16) -> Line
         Style::default().fg(Color::DarkGray),
     ));
     Line::from(spans)
+}
+
+fn linear_state_color(state_type: &str) -> Color {
+    match state_type {
+        "completed" => Color::Green,
+        "started" => Color::Yellow,
+        "unstarted" => Color::DarkGray,
+        "cancelled" => Color::Red,
+        "backlog" => Color::DarkGray,
+        _ => Color::Gray,
+    }
+}
+
+fn linear_state_symbol(state_type: &str) -> &'static str {
+    match state_type {
+        "completed" => "■",
+        "started" => "▣",
+        "unstarted" => "□",
+        "cancelled" => "✕",
+        "backlog" => "□",
+        _ => "□",
+    }
 }
 
 fn build_git_spans<'a>(session: &'a crate::session::Session) -> Vec<Span<'a>> {
@@ -580,30 +651,61 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let (working, waiting, _idle, done, _unknown) = app.status_counts();
     let total = app.sessions.len();
 
-    let mut parts = vec![format!("{} sessions", total)];
+    let mut spans = vec![
+        Span::styled(format!("  {} sessions", total), Style::default().fg(Color::DarkGray)),
+    ];
 
-    if working > 0 {
-        parts.push(format!("{} working", working));
-    }
-    if done > 0 {
-        parts.push(format!("{} done", done));
-    }
-    if waiting > 0 {
-        parts.push(format!("{} awaiting input", waiting));
-    }
-
-    let status = parts.join(" │ ");
-
-    let filter_info = if !app.filter.is_empty() {
-        format!(" │ filter: \"{}\"", app.filter)
+    if app.session_status_labels {
+        if working > 0 {
+            spans.push(Span::styled(
+                format!(" | {} working", working),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        if done > 0 {
+            spans.push(Span::styled(
+                format!(" | {} done", done),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        if waiting > 0 {
+            spans.push(Span::styled(
+                format!(" | {} awaiting input", waiting),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
     } else {
-        String::new()
-    };
+        if working > 0 {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                format!("{}{}", ClaudeCodeStatus::Working.symbol(), working),
+                Style::default().fg(Color::Green),
+            ));
+        }
+        if done > 0 {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                format!("{}{}", ClaudeCodeStatus::Done.symbol(), done),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
+        if waiting > 0 {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                format!("{}{}", ClaudeCodeStatus::WaitingInput.symbol(), waiting),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+    }
 
-    let text = format!("  {}{}", status, filter_info);
+    if !app.filter.is_empty() {
+        spans.push(Span::styled(
+            format!("  filter: \"{}\"", app.filter),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
 
-    let bar = Paragraph::new(text).style(Style::default().fg(Color::DarkGray));
-
+    let bar = Paragraph::new(Line::from(spans));
     frame.render_widget(bar, area);
 }
 

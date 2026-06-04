@@ -25,7 +25,9 @@ Full docs live in `docs/` under numbered folders. See `docs/README.md` for the t
 - `src/detection.rs` — Status detection logic. `content_above_status_bar()` for stripping status bar from diffs, `has_input_prompt()` for recognizing all prompt types, `detect_status()` / `detect_static_status()` for classifying pane content.
 - `src/app/mod.rs` — Core app state. `tick_status()` runs on a configurable interval to update session statuses. Done lifecycle (`worked_unfocused`, `done_panes`), state file persistence, first-observation guard.
 - `src/session.rs` — `ClaudeCodeStatus` enum with Idle, Working, Done, WaitingInput, Unknown.
-- `src/settings.rs` — Settings file loading. Lookup: `~/.claude-tmux/settings.json` > repo `settings.json`.
+- `src/settings.rs` — Settings file loading. Top-level options (`grouping`, `session_status_labels`, etc.) and optional `task_integration` block. Lookup: `~/.claude-tmux/settings.json` > repo `settings.json`.
+- `src/linear.rs` — Linear API polling (`LinearPoller`), identifier extraction with optional prefix filter, cache file at `/tmp/claude-tmux-linear.json`.
+- `src/app/grouping.rs` — Session grouping by shared name prefix. `extract_task_prefix()`, `load_titles()` from `~/.claude-tmux/titles.json`.
 - `src/ui/mod.rs` — Rendering. Status colors: Working=Green, Done=Cyan, WaitingInput=Yellow, Idle=DarkGray, Unknown=Gray.
 - `src/tmux.rs` — tmux command wrappers. `capture_pane()` captures last N lines of a pane.
 - `src/main.rs` — Entry point. Popup mode (default) vs headless daemon mode (`--headless`).
