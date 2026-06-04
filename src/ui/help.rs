@@ -8,15 +8,8 @@ use ratatui::{
     Frame,
 };
 
-pub fn render_help(frame: &mut Frame) {
-    let area = centered_rect(60, 21, frame.area());
-
-    let block = Block::default()
-        .title(" Help ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let help_text = vec![
+pub fn render_help(frame: &mut Frame, task_integration_active: bool) {
+    let mut help_text = vec![
         Line::from(Span::styled(
             "Navigation",
             Style::default().add_modifier(Modifier::BOLD),
@@ -49,7 +42,61 @@ pub fn render_help(frame: &mut Frame) {
         )),
         Line::raw("  ?           Show this help"),
         Line::raw("  q / Esc     Quit"),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "Session status",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("●", Style::default().fg(Color::Green)),
+            Span::raw("  Working     "),
+            Span::styled("◉", Style::default().fg(Color::Cyan)),
+            Span::raw("  Done"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("◐", Style::default().fg(Color::Yellow)),
+            Span::raw("  Input       "),
+            Span::styled("○", Style::default().fg(Color::DarkGray)),
+            Span::raw("  Idle"),
+        ]),
     ];
+
+    if task_integration_active {
+        help_text.push(Line::raw(""));
+        help_text.push(Line::from(Span::styled(
+            "Task status",
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        help_text.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("▣", Style::default().fg(Color::Yellow)),
+            Span::raw("  In progress "),
+            Span::styled("■", Style::default().fg(Color::Green)),
+            Span::raw("  Completed"),
+        ]));
+        help_text.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("□", Style::default().fg(Color::DarkGray)),
+            Span::raw("  Not started "),
+            Span::styled("✕", Style::default().fg(Color::Red)),
+            Span::raw("  Cancelled"),
+        ]));
+        help_text.push(Line::raw(""));
+        help_text.push(Line::from(Span::styled(
+            "  Requires headless daemon (--headless)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let height = help_text.len() as u16 + 2; // +2 for border
+    let area = centered_rect(60, height, frame.area());
+
+    let block = Block::default()
+        .title(" Help ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
 
     let paragraph = Paragraph::new(help_text)
         .block(block)

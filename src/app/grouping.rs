@@ -52,6 +52,7 @@ pub fn group_sessions<'a>(
             let sessions = group_map.remove(&key).unwrap();
             let label = if sessions.len() > 1
                 || sessions.iter().any(|s| s.name != key)
+                || is_task_id(&key)
             {
                 Some(key.clone())
             } else {
@@ -65,6 +66,16 @@ pub fn group_sessions<'a>(
             }
         })
         .collect()
+}
+
+/// Returns true if the name matches a task ID pattern: `WORD-DIGITS` (exactly 2 segments).
+fn is_task_id(name: &str) -> bool {
+    let segments: Vec<&str> = name.splitn(3, '-').collect();
+    segments.len() == 2
+        && !segments[0].is_empty()
+        && segments[0].chars().all(|c| c.is_ascii_alphanumeric())
+        && !segments[1].is_empty()
+        && segments[1].chars().all(|c| c.is_ascii_digit())
 }
 
 fn compute_group_key(name: &str, all_names: &[&str]) -> String {
@@ -213,7 +224,12 @@ mod tests {
         let groups = group_sessions(refs, &no_titles());
 
         assert_eq!(groups.len(), 4);
-        assert!(groups.iter().all(|g| g.label.is_none()));
+        // Non-task-ID sessions have no header
+        assert!(groups[0].label.is_none()); // claude-tmux
+        assert!(groups[1].label.is_none()); // md
+        // Task-ID sessions get a header even when solo
+        assert_eq!(groups[2].label.as_deref(), Some("VEL-419"));
+        assert_eq!(groups[3].label.as_deref(), Some("VEL-551"));
     }
 
     #[test]
@@ -230,13 +246,21 @@ mod tests {
         let refs: Vec<&Session> = sessions.iter().collect();
         let groups = group_sessions(refs, &no_titles());
 
-        let multi: Vec<_> = groups.iter().filter(|g| g.has_header()).collect();
-        assert_eq!(multi.len(), 1);
-        assert_eq!(multi[0].label.as_deref(), Some("VEL-420"));
-        assert_eq!(multi[0].sessions.len(), 3);
+        // VEL-420 group has 3 members
+        let vel420: Vec<_> = groups
+            .iter()
+            .filter(|g| g.label.as_deref() == Some("VEL-420"))
+            .collect();
+        assert_eq!(vel420.len(), 1);
+        assert_eq!(vel420[0].sessions.len(), 3);
 
-        let singles: Vec<_> = groups.iter().filter(|g| !g.has_header()).collect();
-        assert_eq!(singles.len(), 4);
+        // Solo task IDs get headers too
+        assert!(groups.iter().any(|g| g.label.as_deref() == Some("VEL-419")));
+        assert!(groups.iter().any(|g| g.label.as_deref() == Some("VEL-551")));
+
+        // Non-task sessions stay headerless
+        let no_header: Vec<_> = groups.iter().filter(|g| !g.has_header()).collect();
+        assert_eq!(no_header.len(), 2); // claude-tmux, md
     }
 
     #[test]
@@ -249,7 +273,20 @@ mod tests {
         let groups = group_sessions(refs, &no_titles());
 
         assert_eq!(groups.len(), 2);
-        assert!(groups.iter().all(|g| g.label.is_none()));
+        // Both are task IDs so both get headers, but they don't merge
+        assert_eq!(groups[0].label.as_deref(), Some("VEL-419"));
+        assert_eq!(groups[1].label.as_deref(), Some("VEL-420"));
+    }
+
+    #[test]
+    fn solo_task_id_gets_header() {
+        let sessions = vec![make_session("VEL-421")];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].label.as_deref(), Some("VEL-421"));
+        assert_eq!(groups[0].sessions.len(), 1);
     }
 
     #[test]

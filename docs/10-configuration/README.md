@@ -4,7 +4,7 @@ Settings file format and options for claude-tmux.
 
 | Page | Use it for |
 |------|------------|
-| [settings-file.md](settings-file.md) | File locations, JSON format, all available options |
+| [settings-file.md](settings-file.md) | File locations, JSON format, all options (top-level, task integration, titles file) |
 
 ## Scope
 

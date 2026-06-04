@@ -1,4 +1,7 @@
 {
   "status_interval_ms": 500,
-  "hook_override_delay_ms": 5000
+  "hook_override_delay_ms": 5000,
+  "show_git_info": true,
+  "session_status_labels": true,
+  "grouping": false
 }
