@@ -7,14 +7,21 @@ fn default_status_interval_ms() -> u64 {
     500
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 struct SettingsFile {
     #[serde(default = "default_status_interval_ms")]
     status_interval_ms: u64,
+    #[serde(default = "default_true")]
+    show_git_info: bool,
 }
 
 pub struct Settings {
     pub status_interval: Duration,
+    pub show_git_info: bool,
 }
 
 impl Settings {
@@ -29,9 +36,11 @@ impl Settings {
         match file {
             Some(f) => Settings {
                 status_interval: Duration::from_millis(f.status_interval_ms.max(20)),
+                show_git_info: f.show_git_info,
             },
             None => Settings {
                 status_interval: Duration::from_millis(default_status_interval_ms()),
+                show_git_info: true,
             },
         }
     }

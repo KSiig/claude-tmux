@@ -216,19 +216,17 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 (ClaudeCodeStatus::Unknown, false) => Color::DarkGray,
             };
 
-            let path_color = if is_selected {
-                Color::White
-            } else {
-                Color::DarkGray
-            };
-
             let name_style = if is_current {
                 Style::default().add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
 
-            let git_spans = build_git_spans(session);
+            let git_spans = if app.show_git_info {
+                build_git_spans(session)
+            } else {
+                vec![]
+            };
 
             let is_child = group.label.as_deref().is_some_and(|l| session.name != l);
             let inline_title = if is_child {
@@ -239,6 +237,13 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             let detail = inline_title
                 .map(|t| t.to_string())
                 .unwrap_or_else(|| session.display_path());
+            let detail_color = if inline_title.is_some() {
+                Color::White
+            } else if is_selected {
+                Color::White
+            } else {
+                Color::DarkGray
+            };
 
             let mut line_spans = vec![
                 Span::raw(format!(" {} ", marker)),
@@ -254,7 +259,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(status_color),
                 ),
                 Span::raw("  "),
-                Span::styled(detail, Style::default().fg(path_color)),
+                Span::styled(detail, Style::default().fg(detail_color)),
             ];
             line_spans.extend(git_spans);
 

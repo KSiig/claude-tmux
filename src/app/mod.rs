@@ -75,6 +75,8 @@ pub struct App {
     status_interval: Duration,
     /// Cached group titles loaded from ~/.claude-tmux/titles.json
     pub group_titles: HashMap<String, String>,
+    /// Whether to show git branch and dirty-star in the session list
+    pub show_git_info: bool,
 }
 
 impl App {
@@ -114,6 +116,7 @@ impl App {
             writes_status_file: headless,
             status_interval: settings.status_interval,
             group_titles: grouping::load_titles(),
+            show_git_info: settings.show_git_info,
         };
 
         app.apply_persisted_done();

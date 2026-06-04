@@ -50,7 +50,9 @@ pub fn group_sessions<'a>(
         .into_iter()
         .map(|key| {
             let sessions = group_map.remove(&key).unwrap();
-            let label = if sessions.len() > 1 {
+            let label = if sessions.len() > 1
+                || sessions.iter().any(|s| s.name != key)
+            {
                 Some(key.clone())
             } else {
                 None
@@ -92,6 +94,12 @@ fn compute_group_key(name: &str, all_names: &[&str]) -> String {
         }
     }
 
+    // If name looks like WORD-NUMBER-... (3+ dash-segments, 2nd is numeric),
+    // the first two segments form a natural task ID group key.
+    if let Some(prefix) = extract_task_prefix(name) {
+        return prefix;
+    }
+
     // Find longest common prefix at a "-" boundary with any other session.
     // Must contain at least one dash (two segments) to avoid over-grouping.
     let mut best_prefix = String::new();
@@ -109,6 +117,17 @@ fn compute_group_key(name: &str, all_names: &[&str]) -> String {
     }
 
     name.to_string()
+}
+
+/// If name has 3+ dash-delimited segments and the 2nd is numeric,
+/// return the first two segments as a task-ID prefix (e.g. "VEL-420").
+fn extract_task_prefix(name: &str) -> Option<String> {
+    let segments: Vec<&str> = name.splitn(3, '-').collect();
+    if segments.len() >= 3 && segments[1].chars().all(|c| c.is_ascii_digit()) {
+        Some(format!("{}-{}", segments[0], segments[1]))
+    } else {
+        None
+    }
 }
 
 fn longest_common_prefix_at_dash(a: &str, b: &str) -> String {
@@ -245,5 +264,28 @@ mod tests {
         let groups = group_sessions(refs, &titles);
 
         assert_eq!(groups[0].title.as_deref(), Some("Self-hosted runner"));
+    }
+
+    #[test]
+    fn solo_sub_issue_gets_group_header() {
+        let sessions = vec![make_session("VEL-418-476")];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].label.as_deref(), Some("VEL-418"));
+        assert_eq!(groups[0].sessions.len(), 1);
+    }
+
+    #[test]
+    fn solo_sub_issue_gets_title_from_parent_key() {
+        let sessions = vec![make_session("VEL-418-476")];
+        let mut titles = HashMap::new();
+        titles.insert("VEL-418".to_string(), "Multi-AZ Kubernetes".to_string());
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &titles);
+
+        assert_eq!(groups[0].label.as_deref(), Some("VEL-418"));
+        assert_eq!(groups[0].title.as_deref(), Some("Multi-AZ Kubernetes"));
     }
 }
