@@ -210,6 +210,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 (ClaudeCodeStatus::Working, _) => Color::Green,
                 (ClaudeCodeStatus::Done, _) => Color::Cyan,
                 (ClaudeCodeStatus::WaitingInput, _) => Color::Yellow,
+                (ClaudeCodeStatus::Error, _) => Color::Red,
                 (ClaudeCodeStatus::Idle, true) => Color::White,
                 (ClaudeCodeStatus::Idle, false) => Color::DarkGray,
                 (ClaudeCodeStatus::Unknown, true) => Color::Gray,
@@ -577,7 +578,7 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let (working, waiting, _idle, done, _unknown) = app.status_counts();
+    let (working, waiting, _idle, done, error, _unknown) = app.status_counts();
     let total = app.sessions.len();
 
     let mut parts = vec![format!("{} sessions", total)];
@@ -590,6 +591,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     }
     if waiting > 0 {
         parts.push(format!("{} awaiting input", waiting));
+    }
+    if error > 0 {
+        parts.push(format!("{} error", error));
     }
 
     let status = parts.join(" │ ");

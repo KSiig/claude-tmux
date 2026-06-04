@@ -13,6 +13,8 @@ pub enum ClaudeCodeStatus {
     Done,
     /// Awaiting user confirmation/input (y/n prompt, etc.)
     WaitingInput,
+    /// Stopped with an error
+    Error,
     /// Cannot determine status
     #[default]
     Unknown,
@@ -26,6 +28,7 @@ impl ClaudeCodeStatus {
             ClaudeCodeStatus::Working => "●",
             ClaudeCodeStatus::Done => "◉",
             ClaudeCodeStatus::WaitingInput => "◐",
+            ClaudeCodeStatus::Error => "✕",
             ClaudeCodeStatus::Unknown => "?",
         }
     }
@@ -37,6 +40,7 @@ impl ClaudeCodeStatus {
             ClaudeCodeStatus::Working => "working",
             ClaudeCodeStatus::Done => "done",
             ClaudeCodeStatus::WaitingInput => "input",
+            ClaudeCodeStatus::Error => "error",
             ClaudeCodeStatus::Unknown => "unknown",
         }
     }

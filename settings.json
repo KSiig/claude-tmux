@@ -1,3 +1,4 @@
 {
-  "status_interval_ms": 500
+  "status_interval_ms": 500,
+  "hook_override_delay_ms": 5000
 }

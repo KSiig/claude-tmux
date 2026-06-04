@@ -2,6 +2,8 @@ mod app;
 mod completion;
 mod detection;
 mod git;
+mod hooks;
+mod init;
 mod input;
 mod scroll_state;
 mod session;
@@ -23,7 +25,13 @@ use crate::app::App;
 use crate::settings::Settings;
 
 fn main() -> Result<()> {
-    let headless = std::env::args().any(|a| a == "--headless" || a == "-d");
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "init") {
+        return init::run_init();
+    }
+
+    let headless = args.iter().any(|a| a == "--headless" || a == "-d");
 
     if headless {
         return run_headless();

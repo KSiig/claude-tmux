@@ -16,6 +16,7 @@ use anyhow::Result;
 
 use crate::detection::{content_above_status_bar, detect_static_status, detect_status};
 use crate::git::{self, GitContext, PullRequestInfo};
+use crate::hooks;
 use crate::scroll_state::ScrollState;
 use crate::session::{ClaudeCodeStatus, Session};
 use crate::settings::Settings;
@@ -77,6 +78,10 @@ pub struct App {
     pub group_titles: HashMap<String, String>,
     /// Whether to show git branch and dirty-star in the session list
     pub show_git_info: bool,
+    /// Tracks when parsing first started disagreeing with hook status per pane
+    parse_disagree_since: HashMap<String, Instant>,
+    /// How long parsing must consistently disagree before overriding hook status
+    hook_override_delay: Duration,
 }
 
 impl App {
@@ -117,6 +122,8 @@ impl App {
             status_interval: settings.status_interval,
             group_titles: grouping::load_titles(),
             show_git_info: settings.show_git_info,
+            parse_disagree_since: HashMap::new(),
+            hook_override_delay: settings.hook_override_delay,
         };
 
         app.apply_persisted_done();
@@ -187,10 +194,33 @@ impl App {
             let comparable = content_above_status_bar(&content);
             let first_observation = !self.pane_content_cache.contains_key(&pane_id);
             had_first_observation |= first_observation;
-            let raw_status = match self.pane_content_cache.get(&pane_id) {
+            let parsed_status = match self.pane_content_cache.get(&pane_id) {
                 Some(prev) if content_above_status_bar(prev) != comparable => ClaudeCodeStatus::Working,
                 Some(_) => detect_static_status(&content),
                 None => detect_status(&content),
+            };
+
+            let raw_status = match hooks::read_hook_status(&pane_id) {
+                Some((hook_status, _ts)) => {
+                    if hook_status == parsed_status {
+                        self.parse_disagree_since.remove(&pane_id);
+                        hook_status
+                    } else {
+                        let disagree_start = self
+                            .parse_disagree_since
+                            .entry(pane_id.clone())
+                            .or_insert_with(Instant::now);
+                        if disagree_start.elapsed() >= self.hook_override_delay {
+                            parsed_status
+                        } else {
+                            hook_status
+                        }
+                    }
+                }
+                None => {
+                    self.parse_disagree_since.remove(&pane_id);
+                    parsed_status
+                }
             };
 
             // In daemon mode, the attached session is directly visible to
@@ -248,6 +278,9 @@ impl App {
             .collect();
         self.worked_unfocused.retain(|id| live.contains(id.as_str()));
         self.done_panes.retain(|id| live.contains(id.as_str()));
+        self.parse_disagree_since
+            .retain(|id, _| live.contains(id.as_str()));
+        hooks::cleanup_hook_files(&live);
     }
 
     fn read_state_file() -> (HashSet<String>, HashSet<String>) {
@@ -282,10 +315,10 @@ impl App {
 
     /// Write session status counts to a file for external consumers (e.g. status lines).
     fn write_status_file(&self) {
-        let (working, waiting, idle, done, unknown) = self.status_counts();
+        let (working, waiting, idle, done, error, unknown) = self.status_counts();
         let content = format!(
-            "working={}\ndone={}\nidle={}\nwaiting={}\nunknown={}\ntotal={}\n",
-            working, done, idle, waiting, unknown, self.sessions.len()
+            "working={}\ndone={}\nidle={}\nwaiting={}\nerror={}\nunknown={}\ntotal={}\n",
+            working, done, idle, waiting, error, unknown, self.sessions.len()
         );
         let _ = std::fs::write("/tmp/claude-tmux-status", content);
     }
@@ -1262,13 +1295,14 @@ impl App {
     // =========================================================================
 
     /// Count sessions by status
-    pub fn status_counts(&self) -> (usize, usize, usize, usize, usize) {
+    pub fn status_counts(&self) -> (usize, usize, usize, usize, usize, usize) {
         use crate::session::ClaudeCodeStatus;
 
         let mut working = 0;
         let mut waiting = 0;
         let mut idle = 0;
         let mut done = 0;
+        let mut error = 0;
         let mut unknown = 0;
 
         for session in &self.sessions {
@@ -1277,11 +1311,12 @@ impl App {
                 ClaudeCodeStatus::Done => done += 1,
                 ClaudeCodeStatus::WaitingInput => waiting += 1,
                 ClaudeCodeStatus::Idle => idle += 1,
+                ClaudeCodeStatus::Error => error += 1,
                 ClaudeCodeStatus::Unknown => unknown += 1,
             }
         }
 
-        (working, waiting, idle, done, unknown)
+        (working, waiting, idle, done, error, unknown)
     }
 
     // =========================================================================
