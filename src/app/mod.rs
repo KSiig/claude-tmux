@@ -74,7 +74,7 @@ pub struct App {
     /// Interval between status detection ticks
     status_interval: Duration,
     /// Cached group titles loaded from ~/.claude-tmux/titles.json
-    group_titles: HashMap<String, String>,
+    pub group_titles: HashMap<String, String>,
 }
 
 impl App {

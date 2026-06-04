@@ -230,6 +230,16 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let git_spans = build_git_spans(session);
 
+            let is_child = group.label.as_deref().is_some_and(|l| session.name != l);
+            let inline_title = if is_child {
+                app.group_titles.get(&session.name).map(|t| t.as_str())
+            } else {
+                None
+            };
+            let detail = inline_title
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| session.display_path());
+
             let mut line_spans = vec![
                 Span::raw(format!(" {} ", marker)),
                 Span::styled(
@@ -244,7 +254,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(status_color),
                 ),
                 Span::raw("  "),
-                Span::styled(session.display_path(), Style::default().fg(path_color)),
+                Span::styled(detail, Style::default().fg(path_color)),
             ];
             line_spans.extend(git_spans);
 
