@@ -73,6 +73,8 @@ pub struct App {
     writes_status_file: bool,
     /// Interval between status detection ticks
     status_interval: Duration,
+    /// Cached group titles loaded from ~/.claude-tmux/titles.json
+    group_titles: HashMap<String, String>,
 }
 
 impl App {
@@ -111,6 +113,7 @@ impl App {
             last_status_tick: Instant::now() - Duration::from_secs(1),
             writes_status_file: headless,
             status_interval: settings.status_interval,
+            group_titles: grouping::load_titles(),
         };
 
         app.apply_persisted_done();
@@ -293,6 +296,7 @@ impl App {
     /// Refresh the session list (shows "Refreshed" message)
     pub fn refresh(&mut self) {
         self.clear_messages();
+        self.group_titles = grouping::load_titles();
         if self.refresh_sessions() {
             self.message = Some("Refreshed".to_string());
         }
@@ -351,7 +355,7 @@ impl App {
     /// Get filtered sessions grouped by shared name prefix.
     /// Multi-member groups get a label (rendered as a header); singletons do not.
     pub fn grouped_filtered_sessions(&self) -> Vec<grouping::SessionGroup<'_>> {
-        grouping::group_sessions(self.filtered_sessions())
+        grouping::group_sessions(self.filtered_sessions(), &self.group_titles)
     }
 
     /// Count how many group headers appear before the selected session index.

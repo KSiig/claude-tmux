@@ -179,7 +179,8 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     for group in &groups {
         if let Some(ref label) = group.label {
-            let header_line = render_group_header(label, area.width);
+            let header_line =
+                render_group_header(label, group.title.as_deref(), area.width);
             items.push(ListItem::new(header_line));
         }
 
@@ -278,24 +279,35 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
     app.scroll_state = scroll_state;
 }
 
-fn render_group_header<'a>(label: &str, width: u16) -> Line<'a> {
-    let dashes_left = "── ";
-    let dashes_right_len = (width as usize)
-        .saturating_sub(dashes_left.len() + label.len() + 2); // +2 for " ─…"
-    let dashes_right = "─".repeat(dashes_right_len.max(1));
-    Line::from(vec![
-        Span::styled(dashes_left, Style::default().fg(Color::DarkGray)),
+fn render_group_header<'a>(label: &str, title: Option<&str>, width: u16) -> Line<'a> {
+    let prefix = "── ";
+    let title_part = match title {
+        Some(t) => format!(" — {}", t),
+        None => String::new(),
+    };
+    let used = prefix.len() + label.len() + title_part.len() + 2;
+    let dashes_right = "─".repeat((width as usize).saturating_sub(used).max(1));
+
+    let mut spans = vec![
+        Span::styled(prefix, Style::default().fg(Color::DarkGray)),
         Span::styled(
             label.to_string(),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!(" {}", dashes_right),
+    ];
+    if let Some(t) = title {
+        spans.push(Span::styled(
+            format!(" — {}", t),
             Style::default().fg(Color::DarkGray),
-        ),
-    ])
+        ));
+    }
+    spans.push(Span::styled(
+        format!(" {}", dashes_right),
+        Style::default().fg(Color::DarkGray),
+    ));
+    Line::from(spans)
 }
 
 fn build_git_spans<'a>(session: &'a crate::session::Session) -> Vec<Span<'a>> {

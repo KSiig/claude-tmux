@@ -4,6 +4,7 @@ use crate::session::Session;
 
 pub struct SessionGroup<'a> {
     pub label: Option<String>,
+    pub title: Option<String>,
     pub sessions: Vec<&'a Session>,
 }
 
@@ -13,7 +14,21 @@ impl<'a> SessionGroup<'a> {
     }
 }
 
-pub fn group_sessions<'a>(sessions: Vec<&'a Session>) -> Vec<SessionGroup<'a>> {
+pub fn load_titles() -> HashMap<String, String> {
+    let Some(home) = dirs::home_dir() else {
+        return HashMap::new();
+    };
+    let path = home.join(".claude-tmux").join("titles.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+pub fn group_sessions<'a>(
+    sessions: Vec<&'a Session>,
+    titles: &HashMap<String, String>,
+) -> Vec<SessionGroup<'a>> {
     if sessions.is_empty() {
         return vec![];
     }
@@ -36,11 +51,16 @@ pub fn group_sessions<'a>(sessions: Vec<&'a Session>) -> Vec<SessionGroup<'a>> {
         .map(|key| {
             let sessions = group_map.remove(&key).unwrap();
             let label = if sessions.len() > 1 {
-                Some(key)
+                Some(key.clone())
             } else {
                 None
             };
-            SessionGroup { label, sessions }
+            let title = label.as_ref().and_then(|k| titles.get(k).cloned());
+            SessionGroup {
+                label,
+                title,
+                sessions,
+            }
         })
         .collect()
 }
@@ -129,6 +149,10 @@ mod tests {
         }
     }
 
+    fn no_titles() -> HashMap<String, String> {
+        HashMap::new()
+    }
+
     #[test]
     fn parent_child_grouping() {
         let sessions = vec![
@@ -137,7 +161,7 @@ mod tests {
             make_session("VEL-420-557-arc"),
         ];
         let refs: Vec<&Session> = sessions.iter().collect();
-        let groups = group_sessions(refs);
+        let groups = group_sessions(refs, &no_titles());
 
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].label.as_deref(), Some("VEL-420"));
@@ -151,7 +175,7 @@ mod tests {
             make_session("VEL-420-557-arc"),
         ];
         let refs: Vec<&Session> = sessions.iter().collect();
-        let groups = group_sessions(refs);
+        let groups = group_sessions(refs, &no_titles());
 
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].label.as_deref(), Some("VEL-420"));
@@ -167,7 +191,7 @@ mod tests {
             make_session("VEL-551"),
         ];
         let refs: Vec<&Session> = sessions.iter().collect();
-        let groups = group_sessions(refs);
+        let groups = group_sessions(refs, &no_titles());
 
         assert_eq!(groups.len(), 4);
         assert!(groups.iter().all(|g| g.label.is_none()));
@@ -185,7 +209,7 @@ mod tests {
             make_session("VEL-551"),
         ];
         let refs: Vec<&Session> = sessions.iter().collect();
-        let groups = group_sessions(refs);
+        let groups = group_sessions(refs, &no_titles());
 
         let multi: Vec<_> = groups.iter().filter(|g| g.has_header()).collect();
         assert_eq!(multi.len(), 1);
@@ -203,9 +227,23 @@ mod tests {
             make_session("VEL-420"),
         ];
         let refs: Vec<&Session> = sessions.iter().collect();
-        let groups = group_sessions(refs);
+        let groups = group_sessions(refs, &no_titles());
 
         assert_eq!(groups.len(), 2);
         assert!(groups.iter().all(|g| g.label.is_none()));
+    }
+
+    #[test]
+    fn titles_attached_to_groups() {
+        let sessions = vec![
+            make_session("VEL-420"),
+            make_session("VEL-420-556-ci"),
+        ];
+        let mut titles = HashMap::new();
+        titles.insert("VEL-420".to_string(), "Self-hosted runner".to_string());
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &titles);
+
+        assert_eq!(groups[0].title.as_deref(), Some("Self-hosted runner"));
     }
 }
