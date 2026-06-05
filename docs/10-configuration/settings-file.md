@@ -53,6 +53,7 @@ Shipped in `settings.json` at the repo root. Intentionally simple:
 | `show_git_info` | boolean | `true` | Show git branch and dirty indicators in the session list. |
 | `session_status_labels` | boolean | `true` | Show text labels next to session status icons (e.g. `* working` vs just `*`). |
 | `grouping` | boolean | `false` | Group sessions by shared name prefix (e.g. `VEL-420` and `VEL-420-556-ci` group together). |
+| `exclude_sessions` | array of strings | `[]` | Glob patterns for session names to hide from the list. Supports `*` and `?` wildcards. |
 | `task_integration` | object or null | `null` | Optional task tracker integration. See [`task_integration` options](#task_integration-options) below. |
 
 ### `status_interval_ms`
@@ -68,6 +69,18 @@ How frequently claude-tmux captures pane content and runs status detection. Lowe
 Groups sessions that share a name prefix into collapsible groups in the session list.
 
 Grouping is **independent of task integration**. Sessions group by shared name prefix even without any API connection. Adding `task_integration` enriches the groups with titles and status indicators, but is not required.
+
+### `exclude_sessions`
+
+Hides tmux sessions whose name matches any of the given glob patterns. Useful for hiding helper sessions (e.g. sessions spawned by `/flush`).
+
+```json
+{
+  "exclude_sessions": ["flush*", "scratch"]
+}
+```
+
+Supported wildcards: `*` (any sequence of characters), `?` (any single character). Patterns are matched against the full session name.
 
 ## `task_integration` options
 

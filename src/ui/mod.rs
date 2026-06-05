@@ -192,6 +192,11 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             let header_line =
                 render_group_header(label, title, linear_status, app.task_status_labels, area.width);
             items.push(ListItem::new(header_line));
+        } else if group.separator {
+            let sep = "─".repeat(area.width as usize);
+            items.push(ListItem::new(Line::from(
+                Span::styled(sep, Style::default().fg(Color::DarkGray)),
+            )));
         }
 
         for session in &group.sessions {

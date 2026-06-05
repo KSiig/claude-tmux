@@ -53,6 +53,8 @@ struct SettingsFile {
     #[serde(default)]
     grouping: bool,
     #[serde(default)]
+    exclude_sessions: Vec<String>,
+    #[serde(default)]
     task_integration: Option<TaskIntegrationFile>,
 }
 
@@ -72,6 +74,7 @@ pub struct Settings {
     pub done_delay: Duration,
     pub session_status_labels: bool,
     pub grouping: bool,
+    pub exclude_sessions: Vec<String>,
     pub task_integration: Option<TaskIntegration>,
 }
 
@@ -92,6 +95,7 @@ impl Settings {
                 done_delay: Duration::from_millis(f.done_delay_ms),
                 session_status_labels: f.session_status_labels,
                 grouping: f.grouping,
+                exclude_sessions: f.exclude_sessions,
                 task_integration: f.task_integration.map(|t| TaskIntegration {
                     provider: t.provider,
                     issue_prefix: t.issue_prefix,
@@ -108,6 +112,7 @@ impl Settings {
                 done_delay: Duration::from_millis(default_done_delay_ms()),
                 session_status_labels: true,
                 grouping: false,
+                exclude_sessions: Vec::new(),
                 task_integration: None,
             },
         }
@@ -123,6 +128,12 @@ impl Settings {
         dirs::home_dir().map(|d| d.join(".claude-tmux").join("settings.json"))
     }
 
+    pub fn is_session_excluded(&self, name: &str) -> bool {
+        self.exclude_sessions
+            .iter()
+            .any(|pattern| glob_match(pattern, name))
+    }
+
     fn repo_path() -> Option<PathBuf> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("settings.json");
         if path.exists() {
@@ -130,5 +141,73 @@ impl Settings {
         } else {
             None
         }
+    }
+}
+
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let pat: Vec<char> = pattern.chars().collect();
+    let txt: Vec<char> = text.chars().collect();
+    let (plen, tlen) = (pat.len(), txt.len());
+    let (mut pi, mut ti) = (0, 0);
+    let (mut star_pi, mut star_ti) = (usize::MAX, 0);
+
+    while ti < tlen {
+        if pi < plen && (pat[pi] == '?' || pat[pi] == txt[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < plen && pat[pi] == '*' {
+            star_pi = pi;
+            star_ti = ti;
+            pi += 1;
+        } else if star_pi != usize::MAX {
+            pi = star_pi + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
+        }
+    }
+
+    while pi < plen && pat[pi] == '*' {
+        pi += 1;
+    }
+    pi == plen
+}
+
+#[cfg(test)]
+mod tests {
+    use super::glob_match;
+
+    #[test]
+    fn exact_match() {
+        assert!(glob_match("flush", "flush"));
+        assert!(!glob_match("flush", "flush2"));
+    }
+
+    #[test]
+    fn wildcard_suffix() {
+        assert!(glob_match("flush*", "flush"));
+        assert!(glob_match("flush*", "flush:claude"));
+        assert!(!glob_match("flush*", "myflush"));
+    }
+
+    #[test]
+    fn wildcard_prefix() {
+        assert!(glob_match("*flush", "flush"));
+        assert!(glob_match("*flush", "myflush"));
+        assert!(!glob_match("*flush", "flush:claude"));
+    }
+
+    #[test]
+    fn wildcard_both() {
+        assert!(glob_match("*flush*", "myflush:claude"));
+        assert!(glob_match("*flush*", "flush"));
+    }
+
+    #[test]
+    fn wildcard_middle() {
+        assert!(glob_match("fl*sh", "flush"));
+        assert!(glob_match("fl*sh", "flash"));
+        assert!(!glob_match("fl*sh", "flush:x"));
     }
 }

@@ -58,6 +58,8 @@ pub struct Pane {
     pub window_index: String,
     /// Window name this pane belongs to
     pub window_name: String,
+    /// Whether this pane is tagged for exclusion via @claude-tmux-exclude
+    pub excluded: bool,
 }
 
 /// A tmux session that may contain a Claude Code instance

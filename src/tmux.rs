@@ -44,10 +44,10 @@ impl Tmux {
                 // Get panes for this session
                 let panes = Self::list_panes(&name).unwrap_or_default();
 
-                // Find every pane running claude
+                // Find every non-excluded pane running claude
                 let claude_panes: Vec<&Pane> = panes
                     .iter()
-                    .filter(|p| p.current_command == "claude" || p.current_command.contains("claude"))
+                    .filter(|p| !p.excluded && (p.current_command == "claude" || p.current_command.contains("claude")))
                     .collect();
 
                 // Emit one Session row per claude pane. Sessions with zero
@@ -131,7 +131,7 @@ impl Tmux {
                 "-t",
                 session,
                 "-F",
-                "#{pane_id}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{window_name}",
+                "#{pane_id}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{window_name}|||#{@claude-tmux-exclude}",
             ])
             .output()
             .context("Failed to execute tmux list-panes")?;
@@ -146,12 +146,14 @@ impl Tmux {
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split("|||").collect();
             if parts.len() >= 5 {
+                let excluded = parts.get(5).map_or(false, |v| !v.is_empty() && *v != "0");
                 panes.push(Pane {
                     id: parts[0].to_string(),
                     current_command: parts[1].to_string(),
                     current_path: PathBuf::from(parts[2]),
                     window_index: parts[3].to_string(),
                     window_name: parts[4].to_string(),
+                    excluded,
                 });
             }
         }

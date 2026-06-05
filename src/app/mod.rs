@@ -19,7 +19,7 @@ use crate::git::{self, GitContext, PullRequestInfo};
 use crate::hooks;
 use crate::scroll_state::ScrollState;
 use crate::session::{ClaudeCodeStatus, Session};
-use crate::settings::Settings;
+use crate::settings::{glob_match, Settings};
 use crate::tmux::Tmux;
 
 mod grouping;
@@ -100,6 +100,8 @@ pub struct App {
     pub task_issue_prefix: Option<String>,
     /// Cached Linear issue statuses (loaded from /tmp/claude-tmux-linear.json)
     pub linear_statuses: HashMap<String, crate::linear::IssueStatus>,
+    /// Glob patterns for session names to exclude from the list
+    exclude_sessions: Vec<String>,
 }
 
 impl App {
@@ -139,6 +141,12 @@ impl App {
             HashMap::new()
         };
 
+        let exclude_sessions = settings.exclude_sessions.clone();
+        let sessions = sessions
+            .into_iter()
+            .filter(|s| !settings.is_session_excluded(&s.name))
+            .collect();
+
         let mut app = Self {
             sessions,
             selected: 0,
@@ -173,6 +181,7 @@ impl App {
             task_status_labels,
             task_issue_prefix,
             linear_statuses,
+            exclude_sessions,
         };
 
         app.apply_persisted_done();
@@ -415,9 +424,19 @@ impl App {
     /// Refresh sessions and current attached session for headless daemon mode.
     /// Re-lists tmux sessions on every call so newly spawned sessions are picked up.
     pub fn refresh_for_daemon(&mut self) -> Result<()> {
-        self.sessions = Tmux::list_sessions()?;
+        self.sessions = self.filter_excluded(Tmux::list_sessions()?);
         self.current_session = Tmux::current_session()?;
         Ok(())
+    }
+
+    fn filter_excluded(&self, sessions: Vec<Session>) -> Vec<Session> {
+        if self.exclude_sessions.is_empty() {
+            return sessions;
+        }
+        sessions
+            .into_iter()
+            .filter(|s| !self.exclude_sessions.iter().any(|p| glob_match(p, &s.name)))
+            .collect()
     }
 
     pub fn session_names(&self) -> Vec<String> {
@@ -429,7 +448,7 @@ impl App {
         self.pane_content_cache.clear();
         match Tmux::list_sessions() {
             Ok(sessions) => {
-                self.sessions = sessions;
+                self.sessions = self.filter_excluded(sessions);
                 // Ensure selected index is still valid
                 if self.selected >= self.sessions.len() && !self.sessions.is_empty() {
                     self.selected = self.sessions.len() - 1;
@@ -466,6 +485,15 @@ impl App {
         sessions
     }
 
+    /// Flat session list in the same order as the visual display.
+    /// When grouping is enabled, singletons come first, then headed groups.
+    pub fn display_ordered_sessions(&self) -> Vec<&Session> {
+        self.grouped_filtered_sessions()
+            .into_iter()
+            .flat_map(|g| g.sessions)
+            .collect()
+    }
+
     /// Get filtered sessions grouped by shared name prefix.
     /// Multi-member groups get a label (rendered as a header); singletons do not.
     pub fn grouped_filtered_sessions(&self) -> Vec<grouping::SessionGroup<'_>> {
@@ -477,6 +505,7 @@ impl App {
                     label: None,
                     title: None,
                     sessions: vec![s],
+                    separator: false,
                 })
                 .collect();
         }
@@ -487,35 +516,33 @@ impl App {
     fn headers_before(&self, selected: usize) -> usize {
         let groups = self.grouped_filtered_sessions();
         let mut session_idx = 0;
-        let mut headers = 0;
+        let mut extra_lines = 0;
         for group in &groups {
             if session_idx > selected {
                 break;
             }
-            if group.has_header() {
-                headers += 1;
-            }
+            extra_lines += group.non_session_lines();
             session_idx += group.sessions.len();
         }
-        headers
+        extra_lines
     }
 
     fn total_headers(&self) -> usize {
         self.grouped_filtered_sessions()
             .iter()
-            .filter(|g| g.has_header())
-            .count()
+            .map(|g| g.non_session_lines())
+            .sum()
     }
 
     /// Get the currently selected session
     pub fn selected_session(&self) -> Option<&Session> {
-        let filtered = self.filtered_sessions();
-        filtered.get(self.selected).copied()
+        let ordered = self.display_ordered_sessions();
+        ordered.get(self.selected).copied()
     }
 
     /// Move selection up
     pub fn select_prev(&mut self) {
-        let count = self.filtered_sessions().len();
+        let count = self.display_ordered_sessions().len();
         if count > 0 && self.selected > 0 {
             self.selected -= 1;
             self.update_preview();
@@ -524,7 +551,7 @@ impl App {
 
     /// Move selection down
     pub fn select_next(&mut self) {
-        let count = self.filtered_sessions().len();
+        let count = self.display_ordered_sessions().len();
         if count > 0 && self.selected < count - 1 {
             self.selected += 1;
             self.update_preview();
@@ -558,8 +585,8 @@ impl App {
 
     /// Get the index into self.sessions for the currently selected filtered session
     fn selected_session_index(&self) -> Option<usize> {
-        let filtered = self.filtered_sessions();
-        let session = filtered.get(self.selected)?;
+        let ordered = self.display_ordered_sessions();
+        let session = ordered.get(self.selected)?;
         self.sessions.iter().position(|s| std::ptr::eq(s, *session))
     }
 
@@ -1652,7 +1679,7 @@ impl App {
     /// to show metadata and action items. This method computes the index
     /// into the flat list of rendered items.
     pub fn compute_flat_list_index(&self) -> usize {
-        let filtered_count = self.filtered_sessions().len();
+        let filtered_count = self.display_ordered_sessions().len();
         if filtered_count == 0 {
             return 0;
         }
@@ -1687,7 +1714,7 @@ impl App {
     ///
     /// This accounts for the expanded content when in ActionMenu mode.
     pub fn compute_total_list_items(&self) -> usize {
-        let filtered_count = self.filtered_sessions().len();
+        let filtered_count = self.display_ordered_sessions().len();
         if filtered_count == 0 {
             return 0;
         }

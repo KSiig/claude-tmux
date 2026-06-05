@@ -6,11 +6,20 @@ pub struct SessionGroup<'a> {
     pub label: Option<String>,
     pub title: Option<String>,
     pub sessions: Vec<&'a Session>,
+    /// Whether this group needs a plain separator line above it
+    /// (headerless group that follows a headed group)
+    pub separator: bool,
 }
 
 impl<'a> SessionGroup<'a> {
-    pub fn has_header(&self) -> bool {
-        self.label.is_some()
+    pub fn non_session_lines(&self) -> usize {
+        if self.label.is_some() {
+            1
+        } else if self.separator {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -46,26 +55,35 @@ pub fn group_sessions<'a>(
         group_map.entry(key.clone()).or_default().push(sessions[i]);
     }
 
-    seen_keys
-        .into_iter()
-        .map(|key| {
-            let sessions = group_map.remove(&key).unwrap();
-            let label = if sessions.len() > 1
-                || sessions.iter().any(|s| s.name != key)
-                || is_task_id(&key)
-            {
-                Some(key.clone())
-            } else {
-                None
-            };
-            let title = label.as_ref().and_then(|k| titles.get(k).cloned());
-            SessionGroup {
-                label,
-                title,
-                sessions,
-            }
-        })
-        .collect()
+    let mut headerless: Vec<SessionGroup<'a>> = Vec::new();
+    let mut headed: Vec<SessionGroup<'a>> = Vec::new();
+
+    for key in seen_keys {
+        let sessions = group_map.remove(&key).unwrap();
+        let label = if sessions.len() > 1
+            || sessions.iter().any(|s| s.name != key)
+            || is_task_id(&key)
+        {
+            Some(key.clone())
+        } else {
+            None
+        };
+        let title = label.as_ref().and_then(|k| titles.get(k).cloned());
+        let group = SessionGroup {
+            label,
+            title,
+            sessions,
+            separator: false,
+        };
+        if group.label.is_some() {
+            headed.push(group);
+        } else {
+            headerless.push(group);
+        }
+    }
+
+    headerless.extend(headed);
+    headerless
 }
 
 /// Returns true if the name matches a task ID pattern: `WORD-DIGITS` (exactly 2 segments).
@@ -259,7 +277,7 @@ mod tests {
         assert!(groups.iter().any(|g| g.label.as_deref() == Some("VEL-551")));
 
         // Non-task sessions stay headerless
-        let no_header: Vec<_> = groups.iter().filter(|g| !g.has_header()).collect();
+        let no_header: Vec<_> = groups.iter().filter(|g| g.label.is_none()).collect();
         assert_eq!(no_header.len(), 2); // claude-tmux, md
     }
 
@@ -324,5 +342,57 @@ mod tests {
 
         assert_eq!(groups[0].label.as_deref(), Some("VEL-418"));
         assert_eq!(groups[0].title.as_deref(), Some("Multi-AZ Kubernetes"));
+    }
+
+    #[test]
+    fn singleton_sessions_not_absorbed_by_multi_pane_groups() {
+        let sessions = vec![
+            make_session("0-orc"),
+            make_session("claude-tmux"),
+            make_session("claude-tmux"),
+            make_session("cloudsim"),
+            make_session("flush"),
+            make_session("flush"),
+            make_session("obsidian"),
+            make_session("test-sonnet"),
+            make_session("VEL-422"),
+            make_session("VEL-422-cron"),
+            make_session("VEL-423"),
+        ];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        for g in &groups {
+            let names: Vec<_> = g.sessions.iter().map(|s| s.name.as_str()).collect();
+            eprintln!("Group {:?} -> {:?}", g.label, names);
+        }
+
+        // obsidian and test-sonnet must not land in the flush group
+        let flush_group = groups.iter().find(|g| g.label.as_deref() == Some("flush"));
+        if let Some(fg) = flush_group {
+            let names: Vec<_> = fg.sessions.iter().map(|s| s.name.as_str()).collect();
+            assert!(!names.contains(&"obsidian"), "obsidian in flush group: {:?}", names);
+            assert!(!names.contains(&"test-sonnet"), "test-sonnet in flush group: {:?}", names);
+        }
+
+        // cloudsim must not land in the claude-tmux group
+        let ct_group = groups.iter().find(|g| g.label.as_deref() == Some("claude-tmux"));
+        if let Some(cg) = ct_group {
+            let names: Vec<_> = cg.sessions.iter().map(|s| s.name.as_str()).collect();
+            assert!(!names.contains(&"cloudsim"), "cloudsim in claude-tmux group: {:?}", names);
+        }
+
+        // Each singleton should be ungrouped (no header)
+        for name in &["cloudsim", "obsidian"] {
+            let found = groups.iter().any(|g| {
+                g.label.is_none() && g.sessions.iter().any(|s| s.name == *name)
+            });
+            assert!(found, "{} should be a headerless singleton", name);
+        }
+
+        // Singletons come before headed groups
+        let first_headed = groups.iter().position(|g| g.label.is_some()).unwrap();
+        let last_headerless = groups.iter().rposition(|g| g.label.is_none()).unwrap();
+        assert!(last_headerless < first_headed, "all singletons should precede headed groups");
     }
 }
