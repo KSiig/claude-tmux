@@ -17,14 +17,13 @@ impl Tmux {
             .args([
                 "list-sessions",
                 "-F",
-                "#{session_name}\t#{session_created}\t#{session_attached}\t#{session_windows}",
+                "#{session_name}|||#{session_created}|||#{session_attached}|||#{session_windows}",
             ])
             .output()
             .context("Failed to execute tmux list-sessions")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // No sessions is not an error for us
             if stderr.contains("no server running") || stderr.contains("no sessions") {
                 return Ok(Vec::new());
             }
@@ -35,7 +34,7 @@ impl Tmux {
         let mut sessions = Vec::new();
 
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.split('\t').collect();
+            let parts: Vec<&str> = line.split("|||").collect();
             if parts.len() >= 4 {
                 let name = parts[0].to_string();
                 let created = parts[1].parse().unwrap_or(0);
@@ -132,7 +131,7 @@ impl Tmux {
                 "-t",
                 session,
                 "-F",
-                "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{window_index}\t#{window_name}",
+                "#{pane_id}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{window_name}",
             ])
             .output()
             .context("Failed to execute tmux list-panes")?;
@@ -145,7 +144,7 @@ impl Tmux {
         let mut panes = Vec::new();
 
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.split('\t').collect();
+            let parts: Vec<&str> = line.split("|||").collect();
             if parts.len() >= 5 {
                 panes.push(Pane {
                     id: parts[0].to_string(),
