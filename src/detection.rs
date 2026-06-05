@@ -22,6 +22,10 @@ fn has_input_prompt(content: &str) -> bool {
         || content.contains("Esc to cancel")
 }
 
+fn is_active_tool_phase(content: &str) -> bool {
+    content.contains("Effecting\u{2026}")
+}
+
 /// Detect Claude Code status when content has NOT changed since the last check.
 ///
 /// Working is determined externally by content-change detection. This function
@@ -29,6 +33,9 @@ fn has_input_prompt(content: &str) -> bool {
 pub fn detect_static_status(content: &str) -> ClaudeCodeStatus {
     if has_input_prompt(content) {
         return ClaudeCodeStatus::WaitingInput;
+    }
+    if is_active_tool_phase(content) {
+        return ClaudeCodeStatus::Working;
     }
     if has_input_field(content) {
         if content.contains("ctrl+c") && content.contains("to interrupt") {
@@ -50,6 +57,10 @@ pub fn detect_static_status(content: &str) -> ClaudeCodeStatus {
 pub fn detect_status(content: &str) -> ClaudeCodeStatus {
     if has_input_prompt(content) {
         return ClaudeCodeStatus::WaitingInput;
+    }
+
+    if is_active_tool_phase(content) {
+        return ClaudeCodeStatus::Working;
     }
 
     if has_input_field(content) {
@@ -118,6 +129,13 @@ mod tests {
         let content = "Would you like to proceed?\n\n❯ 1. Yes, and use auto mode\n  2. Yes, manually approve edits\n     shift+tab to approve with this feedback";
         assert_eq!(detect_status(content), ClaudeCodeStatus::WaitingInput);
         assert_eq!(detect_static_status(content), ClaudeCodeStatus::WaitingInput);
+    }
+
+    #[test]
+    fn test_effecting_phase_is_working() {
+        let content = "⏺ Running 1 shell command…\n  ⎿  $ git rebase --continue\n\n✢ Effecting\u{2026} (34s · ↑ 1.1k tokens)\n\n─────\n❯ ";
+        assert_eq!(detect_status(content), ClaudeCodeStatus::Working);
+        assert_eq!(detect_static_status(content), ClaudeCodeStatus::Working);
     }
 
     #[test]

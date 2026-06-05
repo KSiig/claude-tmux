@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -100,7 +100,13 @@ impl LinearPoller {
             "variables": { "ids": identifiers }
         });
 
-        let resp: GqlResponse = ureq::post(LINEAR_API)
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(10)))
+            .build()
+            .new_agent();
+
+        let resp: GqlResponse = agent
+            .post(LINEAR_API)
             .header("Authorization", api_key)
             .header("Content-Type", "application/json")
             .send_json(&body)?

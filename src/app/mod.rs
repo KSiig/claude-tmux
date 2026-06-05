@@ -10,7 +10,7 @@ mod helpers;
 mod mode;
 
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 
@@ -82,6 +82,10 @@ pub struct App {
     parse_disagree_since: HashMap<String, Instant>,
     /// How long parsing must consistently disagree before overriding hook status
     hook_override_delay: Duration,
+    /// Tracks when each pane first became Idle after being in worked_unfocused
+    idle_since: HashMap<String, Instant>,
+    /// How long a pane must remain Idle before transitioning to Done
+    done_delay: Duration,
     /// Whether to show text labels next to session status icons
     pub session_status_labels: bool,
     /// Whether session grouping by shared name prefix is enabled
@@ -160,6 +164,8 @@ impl App {
             show_git_info: settings.show_git_info,
             parse_disagree_since: HashMap::new(),
             hook_override_delay: settings.hook_override_delay,
+            idle_since: HashMap::new(),
+            done_delay: settings.done_delay,
             session_status_labels: settings.session_status_labels,
             grouping_enabled: settings.grouping,
             task_show_titles,
@@ -244,19 +250,30 @@ impl App {
             };
 
             let raw_status = match hooks::read_hook_status(&pane_id) {
-                Some((hook_status, _ts)) => {
+                Some((hook_status, ts)) => {
                     if hook_status == parsed_status {
                         self.parse_disagree_since.remove(&pane_id);
                         hook_status
                     } else {
-                        let disagree_start = self
-                            .parse_disagree_since
-                            .entry(pane_id.clone())
-                            .or_insert_with(Instant::now);
-                        if disagree_start.elapsed() >= self.hook_override_delay {
+                        let now_epoch = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let hook_age = Duration::from_secs(now_epoch.saturating_sub(ts));
+
+                        if hook_age >= self.hook_override_delay {
+                            self.parse_disagree_since.remove(&pane_id);
                             parsed_status
                         } else {
-                            hook_status
+                            let disagree_start = self
+                                .parse_disagree_since
+                                .entry(pane_id.clone())
+                                .or_insert_with(Instant::now);
+                            if disagree_start.elapsed() >= self.hook_override_delay {
+                                parsed_status
+                            } else {
+                                hook_status
+                            }
                         }
                     }
                 }
@@ -280,15 +297,23 @@ impl App {
                 self.done_panes.remove(&pane_id);
             }
 
-            // On the first observation we don't have a content diff yet, so
-            // Idle detection is unreliable — suppress the worked_unfocused→Done
-            // transition to avoid a false Done flash. Working/WaitingInput are
-            // still detected correctly from static content.
+            if raw_status != ClaudeCodeStatus::Idle {
+                self.idle_since.remove(&pane_id);
+            }
+
             let status = if first_observation && raw_status == ClaudeCodeStatus::Idle && !self.done_panes.contains(&pane_id) {
+                self.worked_unfocused.remove(&pane_id);
                 ClaudeCodeStatus::Idle
-            } else if !first_observation && raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.remove(&pane_id) {
-                self.done_panes.insert(pane_id.clone());
-                ClaudeCodeStatus::Done
+            } else if !first_observation && raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.contains(&pane_id) {
+                let idle_start = self.idle_since.entry(pane_id.clone()).or_insert_with(Instant::now);
+                if idle_start.elapsed() >= self.done_delay {
+                    self.worked_unfocused.remove(&pane_id);
+                    self.idle_since.remove(&pane_id);
+                    self.done_panes.insert(pane_id.clone());
+                    ClaudeCodeStatus::Done
+                } else {
+                    ClaudeCodeStatus::Idle
+                }
             } else if raw_status == ClaudeCodeStatus::Idle && self.done_panes.contains(&pane_id) && !is_focused {
                 ClaudeCodeStatus::Done
             } else {
@@ -323,6 +348,7 @@ impl App {
         self.done_panes.retain(|id| live.contains(id.as_str()));
         self.parse_disagree_since
             .retain(|id, _| live.contains(id.as_str()));
+        self.idle_since.retain(|id, _| live.contains(id.as_str()));
         hooks::cleanup_hook_files(&live);
     }
 

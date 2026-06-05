@@ -19,6 +19,10 @@ fn default_hook_override_delay_ms() -> u64 {
     5000
 }
 
+fn default_done_delay_ms() -> u64 {
+    2000
+}
+
 #[derive(Deserialize)]
 struct TaskIntegrationFile {
     provider: String,
@@ -42,6 +46,8 @@ struct SettingsFile {
     show_git_info: bool,
     #[serde(default = "default_hook_override_delay_ms")]
     hook_override_delay_ms: u64,
+    #[serde(default = "default_done_delay_ms")]
+    done_delay_ms: u64,
     #[serde(default = "default_true")]
     session_status_labels: bool,
     #[serde(default)]
@@ -63,6 +69,7 @@ pub struct Settings {
     pub status_interval: Duration,
     pub show_git_info: bool,
     pub hook_override_delay: Duration,
+    pub done_delay: Duration,
     pub session_status_labels: bool,
     pub grouping: bool,
     pub task_integration: Option<TaskIntegration>,
@@ -82,6 +89,7 @@ impl Settings {
                 status_interval: Duration::from_millis(f.status_interval_ms.max(20)),
                 show_git_info: f.show_git_info,
                 hook_override_delay: Duration::from_millis(f.hook_override_delay_ms),
+                done_delay: Duration::from_millis(f.done_delay_ms),
                 session_status_labels: f.session_status_labels,
                 grouping: f.grouping,
                 task_integration: f.task_integration.map(|t| TaskIntegration {
@@ -97,6 +105,7 @@ impl Settings {
                 status_interval: Duration::from_millis(default_status_interval_ms()),
                 show_git_info: true,
                 hook_override_delay: Duration::from_millis(default_hook_override_delay_ms()),
+                done_delay: Duration::from_millis(default_done_delay_ms()),
                 session_status_labels: true,
                 grouping: false,
                 task_integration: None,

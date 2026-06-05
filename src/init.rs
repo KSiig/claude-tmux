@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -28,6 +29,8 @@ pub fn run_init() -> Result<()> {
             println!("  {}", event);
         }
     }
+
+    install_daemon()?;
 
     Ok(())
 }
@@ -125,4 +128,159 @@ fn add_claude_hooks(script_path: &PathBuf) -> Result<Vec<String>> {
     }
 
     Ok(added)
+}
+
+// =========================================================================
+// Daemon service installation
+// =========================================================================
+
+fn install_daemon() -> Result<()> {
+    let binary = std::env::current_exe().context("could not determine binary path")?;
+
+    if cfg!(target_os = "macos") {
+        install_launchd(&binary)
+    } else if cfg!(target_os = "linux") {
+        install_systemd(&binary)
+    } else {
+        println!("Unsupported OS for daemon installation. Start manually:");
+        println!("  {} --headless &", binary.display());
+        Ok(())
+    }
+}
+
+fn install_launchd(binary: &PathBuf) -> Result<()> {
+    let label = "com.claude-tmux.daemon";
+    let plist_dir = dirs::home_dir()
+        .context("could not determine home directory")?
+        .join("Library")
+        .join("LaunchAgents");
+    std::fs::create_dir_all(&plist_dir)?;
+    let plist_path = plist_dir.join(format!("{}.plist", label));
+
+    let path_env = build_path_env();
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{binary}</string>
+        <string>--headless</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path}</string>{linear_key}
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-tmux-daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-tmux-daemon.log</string>
+</dict>
+</plist>
+"#,
+        label = label,
+        binary = binary.display(),
+        path = path_env,
+        linear_key = linear_key_plist_fragment(),
+    );
+
+    // Unload existing service if present (ignore errors — might not be loaded)
+    if plist_path.exists() {
+        let _ = Command::new("launchctl")
+            .args(["unload", &plist_path.to_string_lossy()])
+            .output();
+    }
+
+    std::fs::write(&plist_path, plist)?;
+
+    let status = Command::new("launchctl")
+        .args(["load", &plist_path.to_string_lossy()])
+        .status()
+        .context("failed to run launchctl load")?;
+
+    if status.success() {
+        println!("Daemon installed and started (launchd: {})", label);
+    } else {
+        anyhow::bail!("launchctl load failed");
+    }
+
+    Ok(())
+}
+
+fn install_systemd(binary: &PathBuf) -> Result<()> {
+    let unit_dir = dirs::home_dir()
+        .context("could not determine home directory")?
+        .join(".config")
+        .join("systemd")
+        .join("user");
+    std::fs::create_dir_all(&unit_dir)?;
+    let unit_path = unit_dir.join("claude-tmux.service");
+
+    let path_env = build_path_env();
+
+    let mut env_lines = format!("Environment=PATH={}", path_env);
+    if let Ok(key) = std::env::var("LINEAR_API_KEY") {
+        env_lines.push_str(&format!("\nEnvironment=LINEAR_API_KEY={}", key));
+    }
+
+    let unit = format!(
+        r#"[Unit]
+Description=claude-tmux status daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart={binary} --headless
+Restart=on-failure
+RestartSec=5
+{env}
+
+[Install]
+WantedBy=default.target
+"#,
+        binary = binary.display(),
+        env = env_lines,
+    );
+
+    std::fs::write(&unit_path, unit)?;
+
+    let _ = Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status();
+
+    let status = Command::new("systemctl")
+        .args(["--user", "enable", "--now", "claude-tmux"])
+        .status()
+        .context("failed to run systemctl")?;
+
+    if status.success() {
+        println!("Daemon installed and started (systemd: claude-tmux.service)");
+    } else {
+        anyhow::bail!("systemctl enable --now failed");
+    }
+
+    Ok(())
+}
+
+fn build_path_env() -> String {
+    std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string())
+}
+
+fn linear_key_plist_fragment() -> String {
+    match std::env::var("LINEAR_API_KEY") {
+        Ok(key) => format!(
+            "\n        <key>LINEAR_API_KEY</key>\n        <string>{}</string>",
+            key
+        ),
+        Err(_) => String::new(),
+    }
 }
