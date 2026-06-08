@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::git::GitContext;
 
 /// Status of a Claude Code instance in a pane
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ClaudeCodeStatus {
     /// Waiting at prompt, ready for input
     Idle,

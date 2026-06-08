@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::session::Session;
+use crate::session::{ClaudeCodeStatus, Session};
 
 pub struct SessionGroup<'a> {
     pub label: Option<String>,
@@ -14,6 +14,8 @@ pub struct SessionGroup<'a> {
     pub strip_prefix: bool,
     /// Number of sessions hidden by group collapse (0 when visible)
     pub hidden_count: usize,
+    /// Per-status counts for hidden sessions (populated when collapsed)
+    pub hidden_statuses: HashMap<ClaudeCodeStatus, usize>,
 }
 
 impl<'a> SessionGroup<'a> {
@@ -116,6 +118,7 @@ pub fn group_sessions<'a>(
             separator: false,
             strip_prefix,
             hidden_count: 0,
+            hidden_statuses: HashMap::new(),
         };
         if group.label.is_some() {
             headed.push(group);

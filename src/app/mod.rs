@@ -530,6 +530,7 @@ impl App {
                     separator: false,
                     strip_prefix: false,
                     hidden_count: 0,
+                    hidden_statuses: std::collections::HashMap::new(),
                 })
                 .collect();
         }
@@ -541,6 +542,9 @@ impl App {
                 });
                 if self.hidden_groups.contains(key) {
                     group.hidden_count = group.sessions.len();
+                    for s in &group.sessions {
+                        *group.hidden_statuses.entry(s.claude_code_status).or_insert(0) += 1;
+                    }
                     group.sessions.clear();
                 }
             }

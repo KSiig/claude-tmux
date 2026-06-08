@@ -213,7 +213,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             let is_selected = is_collapsed && nav_idx == app.selected;
             let header_line =
-                render_group_header(label, title, linear_status, app.task_status_labels, area.width, group.hidden_count, is_selected);
+                render_group_header(label, title, linear_status, app.task_status_labels, area.width, group.hidden_count, &group.hidden_statuses, is_selected);
             let mut item = ListItem::new(header_line);
             if is_selected {
                 item = item.style(Style::default().bg(Color::DarkGray));
@@ -378,6 +378,7 @@ fn render_group_header<'a>(
     status_labels: bool,
     width: u16,
     hidden_count: usize,
+    hidden_statuses: &std::collections::HashMap<ClaudeCodeStatus, usize>,
     is_selected: bool,
 ) -> Line<'a> {
     let marker = if is_selected { " ▸ " } else { "" };
@@ -387,7 +388,7 @@ fn render_group_header<'a>(
         None => String::new(),
     };
     let hidden_part = if hidden_count > 0 {
-        format!(" ({} hidden)", hidden_count)
+        hidden_status_summary(hidden_statuses)
     } else {
         String::new()
     };
@@ -425,16 +426,61 @@ fn render_group_header<'a>(
         ));
     }
     if hidden_count > 0 {
-        spans.push(Span::styled(
-            hidden_part,
-            Style::default().fg(Color::DarkGray),
-        ));
+        spans.extend(hidden_status_spans(hidden_statuses));
     }
     spans.push(Span::styled(
         format!(" {}", dashes_right),
         Style::default().fg(Color::DarkGray),
     ));
     Line::from(spans)
+}
+
+fn hidden_status_summary(statuses: &std::collections::HashMap<ClaudeCodeStatus, usize>) -> String {
+    use ClaudeCodeStatus::*;
+    let mut parts = Vec::new();
+    for status in &[Working, Done, WaitingInput, Error, Idle, Unknown] {
+        if let Some(&count) = statuses.get(status) {
+            parts.push(format!("{}{}", status.symbol(), count));
+        }
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(" "))
+    }
+}
+
+fn hidden_status_spans(statuses: &std::collections::HashMap<ClaudeCodeStatus, usize>) -> Vec<Span<'static>> {
+    use ClaudeCodeStatus::*;
+    let order = [Working, Done, WaitingInput, Error, Idle, Unknown];
+    let mut spans = Vec::new();
+    let mut first = true;
+    for status in &order {
+        if let Some(&count) = statuses.get(status) {
+            let color = match status {
+                Working => Color::Green,
+                Done => Color::Cyan,
+                WaitingInput => Color::Yellow,
+                Error => Color::Red,
+                Idle => Color::DarkGray,
+                Unknown => Color::DarkGray,
+            };
+            if first {
+                spans.push(Span::styled(" (", Style::default().fg(Color::DarkGray)));
+                first = false;
+            } else {
+                spans.push(Span::styled(" ", Style::default().fg(Color::DarkGray)));
+            }
+            spans.push(Span::styled(
+                format!("{}{}", status.symbol(), count),
+                Style::default().fg(color),
+            ));
+        }
+    }
+    if !first {
+        spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
+    }
+    spans
 }
 
 fn linear_state_color(state_type: &str) -> Color {
