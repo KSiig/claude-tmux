@@ -83,19 +83,21 @@ pub fn group_sessions<'a>(
     let mut group_map: HashMap<String, Vec<&'a Session>> = HashMap::new();
 
     for (i, key) in group_keys.iter().enumerate() {
-        if !group_map.contains_key(key) {
+        let lower = key.to_ascii_lowercase();
+        if !group_map.contains_key(&lower) {
             seen_keys.push(key.clone());
         }
-        group_map.entry(key.clone()).or_default().push(sessions[i]);
+        group_map.entry(lower).or_default().push(sessions[i]);
     }
 
     let mut headerless: Vec<SessionGroup<'a>> = Vec::new();
     let mut headed: Vec<SessionGroup<'a>> = Vec::new();
 
     for key in seen_keys {
-        let sessions = group_map.remove(&key).unwrap();
+        let lower = key.to_ascii_lowercase();
+        let sessions = group_map.remove(&lower).unwrap();
         let label = if sessions.len() > 1
-            || sessions.iter().any(|s| s.name != key)
+            || sessions.iter().any(|s| s.name.to_ascii_lowercase() != lower)
             || is_task_id(&key)
         {
             Some(key.clone())
@@ -103,10 +105,11 @@ pub fn group_sessions<'a>(
             None
         };
         let strip_prefix = label.as_ref().is_some_and(|l| {
+            let l_lower = l.to_ascii_lowercase();
             !is_task_id(l)
-                && sessions.iter().all(|s| s.name != *l)
+                && sessions.iter().all(|s| s.name.to_ascii_lowercase() != l_lower)
                 && sessions.iter().all(|s| {
-                    s.name.starts_with(l.as_str())
+                    s.name.to_ascii_lowercase().starts_with(&l_lower)
                         && s.name.as_bytes().get(l.len()) == Some(&b'-')
                 })
         });
@@ -142,12 +145,15 @@ fn is_task_id(name: &str) -> bool {
 }
 
 fn compute_group_key(name: &str, all_names: &[&str]) -> String {
+    let name_lower = name.to_ascii_lowercase();
+
     // Check if this name starts with another session's name + "-"
     // Use the longest matching parent for nested hierarchies
     let mut best_parent = "";
     for other in all_names {
-        if name != *other
-            && name.starts_with(other)
+        let other_lower = other.to_ascii_lowercase();
+        if name_lower != other_lower
+            && name_lower.starts_with(&other_lower)
             && name.as_bytes().get(other.len()) == Some(&b'-')
             && other.len() > best_parent.len()
         {
@@ -160,8 +166,9 @@ fn compute_group_key(name: &str, all_names: &[&str]) -> String {
 
     // Check if any other session starts with this name + "-" (this is a parent)
     for other in all_names {
-        if name != *other
-            && other.starts_with(name)
+        let other_lower = other.to_ascii_lowercase();
+        if name_lower != other_lower
+            && other_lower.starts_with(&name_lower)
             && other.as_bytes().get(name.len()) == Some(&b'-')
         {
             return name.to_string();
@@ -181,7 +188,7 @@ fn compute_group_key(name: &str, all_names: &[&str]) -> String {
     // "VEL-419" and "VEL-420" do not merge under "VEL".
     let mut best_prefix = String::new();
     for other in all_names {
-        if name == *other {
+        if name.to_ascii_lowercase() == other.to_ascii_lowercase() {
             continue;
         }
         let prefix = longest_common_prefix_at_dash(name, other);
@@ -217,7 +224,7 @@ fn extract_task_prefix(name: &str) -> Option<String> {
 fn longest_common_prefix_at_dash(a: &str, b: &str) -> String {
     let mut last_dash = None;
     for (i, (ca, cb)) in a.chars().zip(b.chars()).enumerate() {
-        if ca != cb {
+        if ca.to_ascii_lowercase() != cb.to_ascii_lowercase() {
             break;
         }
         if ca == '-' {
@@ -522,5 +529,34 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].label.as_deref(), Some("VEL-420"));
         assert!(!groups[0].strip_prefix);
+    }
+
+    #[test]
+    fn case_insensitive_grouping() {
+        let sessions = vec![
+            make_session("VEL-422"),
+            make_session("VEL-422-634-cluster"),
+            make_session("vel-422-634-worker"),
+        ];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].label.as_deref(), Some("VEL-422"));
+        assert_eq!(groups[0].sessions.len(), 3);
+    }
+
+    #[test]
+    fn case_insensitive_category_prefix() {
+        let sessions = vec![
+            make_session("Skill-flush"),
+            make_session("skill-linear"),
+        ];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].sessions.len(), 2);
+        assert!(groups[0].strip_prefix);
     }
 }

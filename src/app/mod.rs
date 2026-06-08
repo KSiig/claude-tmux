@@ -540,7 +540,7 @@ impl App {
                 let key = group.label.as_deref().unwrap_or_else(|| {
                     group.sessions.first().map(|s| s.name.as_str()).unwrap_or("")
                 });
-                if self.hidden_groups.contains(key) {
+                if self.hidden_groups.contains(&key.to_ascii_lowercase()) {
                     group.hidden_count = group.sessions.len();
                     for s in &group.sessions {
                         *group.hidden_statuses.entry(s.claude_code_status).or_insert(0) += 1;
@@ -1485,12 +1485,13 @@ impl App {
             return;
         };
         let group_key = grouping::group_key_for_session(&session.name, &name_refs);
+        let group_key_lower = group_key.to_ascii_lowercase();
 
-        if self.hidden_groups.contains(&group_key) {
-            self.hidden_groups.remove(&group_key);
+        if self.hidden_groups.contains(&group_key_lower) {
+            self.hidden_groups.remove(&group_key_lower);
             self.message = Some(format!("Unhid group '{}'", group_key));
         } else {
-            self.hidden_groups.insert(group_key.clone());
+            self.hidden_groups.insert(group_key_lower);
             let count = self.navigable_items().len();
             if self.selected >= count && count > 0 {
                 self.selected = count - 1;
@@ -1508,7 +1509,7 @@ impl App {
             return;
         }
         if let Some(label) = self.selected_collapsed_group() {
-            self.hidden_groups.remove(&label);
+            self.hidden_groups.remove(&label.to_ascii_lowercase());
             grouping::save_hidden_groups(&self.hidden_groups);
             self.message = Some(format!("Unhid group '{}'", label));
         } else {
