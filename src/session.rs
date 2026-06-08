@@ -60,6 +60,8 @@ pub struct Pane {
     pub window_name: String,
     /// Whether this pane is tagged for exclusion via @claude-tmux-exclude
     pub excluded: bool,
+    /// PID of the pane's shell process (from tmux pane_pid)
+    pub pid: Option<u32>,
 }
 
 /// A tmux session that may contain a Claude Code instance

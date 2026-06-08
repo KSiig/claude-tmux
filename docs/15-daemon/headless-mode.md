@@ -4,22 +4,26 @@ The headless daemon is a long-running background process that continuously monit
 
 ## Starting the daemon
 
+The recommended way to install and start the daemon is via `claude-tmux init`, which sets up a system service (launchd on macOS, systemd on Linux) that starts automatically on login.
+
+To start manually:
+
 ```bash
 claude-tmux --headless
 # or
 claude-tmux -d
 ```
 
-Typically run in a detached tmux pane or via a process manager. Runs indefinitely until killed.
+Runs indefinitely until killed.
 
 ## What the daemon does
 
 On each tick (default every 500 ms, configurable via `status_interval_ms` in [settings-file.md](../10-configuration/settings-file.md)):
 
 1. Re-lists all tmux sessions (picks up newly created sessions).
-2. Captures pane content for each Claude Code pane.
-3. Runs status detection (content-diff for Working, static analysis for Idle/WaitingInput/Unknown).
-4. Tracks Done transitions for unfocused panes.
+2. Runs status detection via the configured backend (process, hooks, or sidecar -- see [detection-method.md](../20-status-detection/detection-method.md)).
+3. Tracks Done transitions for unfocused panes.
+4. Optionally polls Linear API for task titles/statuses.
 5. Writes `/tmp/claude-tmux-status` with aggregate counts.
 6. Writes `/tmp/claude-tmux-state` with per-pane Done/working-unfocused state.
 

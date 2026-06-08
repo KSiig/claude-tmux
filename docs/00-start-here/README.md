@@ -18,10 +18,11 @@ Routing guide for the claude-tmux documentation.
 
 This repo is a Rust tmux popup TUI. The primary areas of interest:
 
-- **Status detection logic**: `src/detection.rs` -- content-diff and static pattern matching to classify Claude Code pane status.
+- **Status detection**: `src/detection/` -- three pluggable backends (process, hooks, sidecar) behind a `DetectionBackend` trait. Content analysis shared in `src/detection/content.rs`.
+- **Setup wizard**: `src/init.rs` -- `claude-tmux init` configures detection method, installs hooks, sets up daemon service.
 - **Application state and tick loop**: `src/app/mod.rs` -- `tick_status()`, Done lifecycle, state file persistence.
-- **Session types**: `src/session.rs` -- `ClaudeCodeStatus` enum (Idle, Working, Done, WaitingInput, Unknown).
-- **Configuration**: `settings.json` at repo root or `~/.claude-tmux/settings.json` for user overrides.
+- **Session types**: `src/session.rs` -- `ClaudeCodeStatus` enum (Idle, Working, Done, WaitingInput, Error, Unknown).
+- **Configuration**: `settings.json` at repo root or `~/.claude-tmux/settings.json` for user overrides. Key settings: `detection_method`, `hook_staleness_secs`.
 - **Daemon vs popup**: `--headless` / `-d` flag runs a background monitor that writes `/tmp/claude-tmux-status`.
 
 Start with [repo-map.md](repo-map.md) for the full directory layout.

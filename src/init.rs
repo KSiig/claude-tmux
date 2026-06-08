@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -18,19 +19,89 @@ const HOOK_EVENTS: &[(&str, &str)] = &[
 ];
 
 pub fn run_init() -> Result<()> {
-    let script_path = create_status_script()?;
-    let added = add_claude_hooks(&script_path)?;
+    println!("claude-tmux setup\n");
 
-    if added.is_empty() {
-        println!("All claude-tmux hooks already configured — nothing to do.");
-    } else {
-        println!("Added hooks to ~/.claude/settings.json:");
-        for event in &added {
-            println!("  {}", event);
+    let choice = prompt_detection_method()?;
+
+    match choice {
+        DetectionChoice::Hooks => {
+            let script_path = create_status_script()?;
+            let added = add_claude_hooks(&script_path)?;
+            if added.is_empty() {
+                println!("All claude-tmux hooks already configured.");
+            } else {
+                println!("Added hooks to ~/.claude/settings.json:");
+                for event in &added {
+                    println!("  {}", event);
+                }
+            }
+            set_detection_method("hooks")?;
+        }
+        DetectionChoice::Sidecar => {
+            set_detection_method("sidecar")?;
+            println!("Sidecar detection enabled (experimental).");
+            println!("The daemon will automatically start pipe-pane sidecars for Claude panes.");
+        }
+        DetectionChoice::Skip => {
+            println!("Keeping default process-tree detection (no additional setup needed).");
         }
     }
 
+    println!();
     install_daemon()?;
+
+    Ok(())
+}
+
+enum DetectionChoice {
+    Hooks,
+    Sidecar,
+    Skip,
+}
+
+fn prompt_detection_method() -> Result<DetectionChoice> {
+    println!("Detection method:");
+    println!("  [1] Hooks — Claude Code hooks write status on each event");
+    println!("  [2] Sidecar (experimental) — Real-time stream analysis via pipe-pane");
+    println!("  [3] Skip — Keep default process-tree detection (no setup needed)");
+    print!("\nChoice [1/2/3]: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    match input.trim() {
+        "1" => Ok(DetectionChoice::Hooks),
+        "2" => Ok(DetectionChoice::Sidecar),
+        _ => Ok(DetectionChoice::Skip),
+    }
+}
+
+fn set_detection_method(method: &str) -> Result<()> {
+    let settings_dir = dirs::home_dir()
+        .context("could not determine home directory")?
+        .join(".claude-tmux");
+    std::fs::create_dir_all(&settings_dir)?;
+    let settings_path = settings_dir.join("settings.json");
+
+    let mut settings: Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path)?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    settings
+        .as_object_mut()
+        .context("settings.json root is not an object")?
+        .insert(
+            "detection_method".to_string(),
+            serde_json::Value::String(method.to_string()),
+        );
+
+    let formatted = serde_json::to_string_pretty(&settings)?;
+    std::fs::write(&settings_path, formatted)?;
+    println!("Set detection_method=\"{}\" in {}", method, settings_path.display());
 
     Ok(())
 }

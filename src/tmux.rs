@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::detection::detect_status;
+use crate::detection::content::detect_from_content;
 use crate::git::GitContext;
 use crate::session::{ClaudeCodeStatus, Pane, Session};
 
@@ -77,7 +77,7 @@ impl Tmux {
                 } else {
                     for claude_pane in claude_panes {
                         let status = Self::capture_pane(&claude_pane.id, 15, true)
-                            .map(|content| detect_status(&content))
+                            .map(|content| detect_from_content(&content))
                             .unwrap_or(ClaudeCodeStatus::Unknown);
 
                         let working_directory = claude_pane.current_path.clone();
@@ -131,7 +131,7 @@ impl Tmux {
                 "-t",
                 session,
                 "-F",
-                "#{pane_id}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{window_name}|||#{@claude-tmux-exclude}",
+                "#{pane_id}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{window_name}|||#{@claude-tmux-exclude}|||#{pane_pid}",
             ])
             .output()
             .context("Failed to execute tmux list-panes")?;
@@ -147,6 +147,7 @@ impl Tmux {
             let parts: Vec<&str> = line.split("|||").collect();
             if parts.len() >= 5 {
                 let excluded = parts.get(5).map_or(false, |v| !v.is_empty() && *v != "0");
+                let pid = parts.get(6).and_then(|s| s.parse::<u32>().ok());
                 panes.push(Pane {
                     id: parts[0].to_string(),
                     current_command: parts[1].to_string(),
@@ -154,6 +155,7 @@ impl Tmux {
                     window_index: parts[3].to_string(),
                     window_name: parts[4].to_string(),
                     excluded,
+                    pid,
                 });
             }
         }

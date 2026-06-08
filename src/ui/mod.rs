@@ -18,6 +18,8 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::app::{App, Mode};
 use crate::session::ClaudeCodeStatus;
 
@@ -166,7 +168,22 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let display_names: Vec<String> = all_sessions.iter().map(|s| s.display_name()).collect();
+    let display_names: Vec<String> = groups
+        .iter()
+        .flat_map(|g| {
+            g.sessions.iter().map(move |s| {
+                let base = s.display_name();
+                if g.strip_prefix {
+                    if let Some(label) = &g.label {
+                        if let Some(stripped) = base.strip_prefix(label.as_str()) {
+                            return stripped.strip_prefix('-').unwrap_or(stripped).to_string();
+                        }
+                    }
+                }
+                base
+            })
+        })
+        .collect();
     let max_name_len = display_names
         .iter()
         .map(|n| n.as_str().width())
@@ -285,6 +302,14 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 line_spans.push(Span::styled(
                     format!("{:<8}", status.label()),
                     Style::default().fg(status_color),
+                ));
+            }
+            if let Some(&since) = session.claude_code_pane.as_ref()
+                .and_then(|id| app.status_since.get(id))
+            {
+                line_spans.push(Span::styled(
+                    format!(" {:<4}", format_elapsed(since)),
+                    Style::default().fg(Color::DarkGray),
                 ));
             }
             line_spans.push(Span::raw("  "));
@@ -747,6 +772,23 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let footer = Paragraph::new(hints).style(Style::default().fg(Color::DarkGray));
 
     frame.render_widget(footer, area);
+}
+
+fn format_elapsed(since_epoch: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let secs = now.saturating_sub(since_epoch);
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
 }
 
 fn render_filter_bar(frame: &mut Frame, input: &str, area: Rect) {

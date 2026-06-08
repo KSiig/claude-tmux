@@ -15,12 +15,16 @@ fn default_true() -> bool {
     true
 }
 
-fn default_hook_override_delay_ms() -> u64 {
-    5000
-}
-
 fn default_done_delay_ms() -> u64 {
     2000
+}
+
+fn default_hook_staleness_secs() -> u64 {
+    90
+}
+
+fn default_detection_method() -> String {
+    "process".to_string()
 }
 
 #[derive(Deserialize)]
@@ -44,10 +48,12 @@ struct SettingsFile {
     status_interval_ms: u64,
     #[serde(default = "default_true")]
     show_git_info: bool,
-    #[serde(default = "default_hook_override_delay_ms")]
-    hook_override_delay_ms: u64,
     #[serde(default = "default_done_delay_ms")]
     done_delay_ms: u64,
+    #[serde(default = "default_detection_method")]
+    detection_method: String,
+    #[serde(default = "default_hook_staleness_secs")]
+    hook_staleness_secs: u64,
     #[serde(default = "default_true")]
     session_status_labels: bool,
     #[serde(default)]
@@ -70,8 +76,9 @@ pub struct TaskIntegration {
 pub struct Settings {
     pub status_interval: Duration,
     pub show_git_info: bool,
-    pub hook_override_delay: Duration,
     pub done_delay: Duration,
+    pub detection_method: crate::detection::DetectionMethod,
+    pub hook_staleness_secs: u64,
     pub session_status_labels: bool,
     pub grouping: bool,
     pub exclude_sessions: Vec<String>,
@@ -91,8 +98,9 @@ impl Settings {
             Some(f) => Settings {
                 status_interval: Duration::from_millis(f.status_interval_ms.max(20)),
                 show_git_info: f.show_git_info,
-                hook_override_delay: Duration::from_millis(f.hook_override_delay_ms),
                 done_delay: Duration::from_millis(f.done_delay_ms),
+                detection_method: crate::detection::DetectionMethod::from_str(&f.detection_method),
+                hook_staleness_secs: f.hook_staleness_secs,
                 session_status_labels: f.session_status_labels,
                 grouping: f.grouping,
                 exclude_sessions: f.exclude_sessions,
@@ -108,8 +116,9 @@ impl Settings {
             None => Settings {
                 status_interval: Duration::from_millis(default_status_interval_ms()),
                 show_git_info: true,
-                hook_override_delay: Duration::from_millis(default_hook_override_delay_ms()),
                 done_delay: Duration::from_millis(default_done_delay_ms()),
+                detection_method: crate::detection::DetectionMethod::Process,
+                hook_staleness_secs: default_hook_staleness_secs(),
                 session_status_labels: true,
                 grouping: false,
                 exclude_sessions: Vec::new(),

@@ -2,10 +2,10 @@ mod app;
 mod completion;
 mod detection;
 mod git;
-mod hooks;
 mod init;
 mod input;
 mod linear;
+mod monitor;
 mod scroll_state;
 mod session;
 mod settings;
@@ -30,6 +30,19 @@ fn main() -> Result<()> {
 
     if args.iter().any(|a| a == "init") {
         return init::run_init();
+    }
+
+    if args.iter().any(|a| a == "monitor") {
+        let pane_id = args
+            .iter()
+            .position(|a| a == "--pane")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str())
+            .unwrap_or_else(|| {
+                eprintln!("Usage: claude-tmux monitor --pane <pane_id>");
+                std::process::exit(1);
+            });
+        return monitor::run_monitor(pane_id);
     }
 
     let headless = args.iter().any(|a| a == "--headless" || a == "-d");
@@ -107,7 +120,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
             }
         }
 
-        // Refresh Claude status via content-change detection (self-throttled to 500 ms)
+        // Refresh Claude status via configured detection backend (self-throttled)
         app.tick_status();
     }
 

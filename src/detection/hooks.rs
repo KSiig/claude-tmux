@@ -1,30 +1,48 @@
 use std::collections::HashSet;
 
 use crate::session::ClaudeCodeStatus;
+use super::{DetectionBackend, DetectionContext};
 
 const HOOK_DIR: &str = "/tmp/claude-tmux-hooks";
 
-/// Read the hook-written status file for a pane.
-/// Returns the status and the unix timestamp when it was written.
-pub fn read_hook_status(pane_id: &str) -> Option<(ClaudeCodeStatus, u64)> {
-    let path = format!("{}/{}", HOOK_DIR, pane_id);
-    let content = std::fs::read_to_string(path).ok()?;
-    let mut parts = content.trim().splitn(2, ' ');
-    let status_str = parts.next()?;
-    let timestamp: u64 = parts.next()?.parse().ok()?;
+pub struct HooksBackend;
 
-    let status = match status_str {
+impl HooksBackend {
+    pub fn new(_staleness_secs: u64) -> Self {
+        Self
+    }
+}
+
+impl DetectionBackend for HooksBackend {
+    fn needs_content(&self) -> bool {
+        false
+    }
+
+    fn detect(&mut self, pane_id: &str, _ctx: &DetectionContext) -> ClaudeCodeStatus {
+        match read_hook_status(pane_id) {
+            ClaudeCodeStatus::Unknown => ClaudeCodeStatus::Idle,
+            status => status,
+        }
+    }
+}
+
+fn read_hook_status(pane_id: &str) -> ClaudeCodeStatus {
+    let path = format!("{}/{}", HOOK_DIR, pane_id);
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return ClaudeCodeStatus::Unknown;
+    };
+
+    let status_str = content.trim().split(' ').next().unwrap_or("");
+
+    match status_str {
         "working" => ClaudeCodeStatus::Working,
         "idle" => ClaudeCodeStatus::Idle,
         "waiting_input" => ClaudeCodeStatus::WaitingInput,
         "error" => ClaudeCodeStatus::Error,
-        _ => return None,
-    };
-
-    Some((status, timestamp))
+        _ => ClaudeCodeStatus::Unknown,
+    }
 }
 
-/// Remove hook files for panes that no longer exist.
 pub fn cleanup_hook_files(live_panes: &HashSet<&str>) {
     let Ok(entries) = std::fs::read_dir(HOOK_DIR) else {
         return;
@@ -61,74 +79,84 @@ mod tests {
     #[test]
     fn test_read_hook_status_working() {
         let pane = "%99_test_working";
-        write_hook_file(pane, "working 1717500000\n");
+        write_hook_file(pane, "working 1780000000\n");
         let result = read_hook_status(pane);
         remove_hook_file(pane);
-        assert_eq!(result, Some((ClaudeCodeStatus::Working, 1717500000)));
+        assert_eq!(result, ClaudeCodeStatus::Working);
     }
 
     #[test]
     fn test_read_hook_status_idle() {
         let pane = "%99_test_idle";
-        write_hook_file(pane, "idle 1717500001\n");
+        write_hook_file(pane, "idle 1780000000\n");
         let result = read_hook_status(pane);
         remove_hook_file(pane);
-        assert_eq!(result, Some((ClaudeCodeStatus::Idle, 1717500001)));
+        assert_eq!(result, ClaudeCodeStatus::Idle);
     }
 
     #[test]
     fn test_read_hook_status_waiting() {
         let pane = "%99_test_waiting";
-        write_hook_file(pane, "waiting_input 1717500002\n");
+        write_hook_file(pane, "waiting_input 1780000000\n");
         let result = read_hook_status(pane);
         remove_hook_file(pane);
-        assert_eq!(result, Some((ClaudeCodeStatus::WaitingInput, 1717500002)));
+        assert_eq!(result, ClaudeCodeStatus::WaitingInput);
     }
 
     #[test]
     fn test_read_hook_status_error() {
         let pane = "%99_test_error";
-        write_hook_file(pane, "error 1717500003\n");
+        write_hook_file(pane, "error 1780000000\n");
         let result = read_hook_status(pane);
         remove_hook_file(pane);
-        assert_eq!(result, Some((ClaudeCodeStatus::Error, 1717500003)));
+        assert_eq!(result, ClaudeCodeStatus::Error);
     }
 
     #[test]
-    fn test_read_hook_status_missing_file() {
-        assert_eq!(read_hook_status("%99_nonexistent"), None);
+    fn test_old_hook_still_trusted() {
+        let pane = "%99_test_old";
+        write_hook_file(pane, "working 1000000000\n");
+        let result = read_hook_status(pane);
+        remove_hook_file(pane);
+        assert_eq!(result, ClaudeCodeStatus::Working);
     }
 
     #[test]
-    fn test_read_hook_status_invalid_content() {
+    fn test_missing_file_returns_unknown() {
+        let result = read_hook_status("%99_nonexistent");
+        assert_eq!(result, ClaudeCodeStatus::Unknown);
+    }
+
+    #[test]
+    fn test_invalid_content_returns_unknown() {
         let pane = "%99_test_invalid";
         write_hook_file(pane, "garbage");
         let result = read_hook_status(pane);
         remove_hook_file(pane);
-        assert_eq!(result, None);
+        assert_eq!(result, ClaudeCodeStatus::Unknown);
     }
 
     #[test]
-    fn test_read_hook_status_unknown_status() {
-        let pane = "%99_test_unknown";
-        write_hook_file(pane, "bogus 1717500000");
+    fn test_status_without_timestamp() {
+        let pane = "%99_test_no_ts";
+        write_hook_file(pane, "idle");
         let result = read_hook_status(pane);
         remove_hook_file(pane);
-        assert_eq!(result, None);
+        assert_eq!(result, ClaudeCodeStatus::Idle);
     }
 
     #[test]
     fn test_cleanup_hook_files() {
         let live = "%99_test_live";
-        let stale = "%99_test_stale";
-        write_hook_file(live, "working 1717500000");
-        write_hook_file(stale, "idle 1717500000");
+        let dead = "%99_test_dead_cleanup";
+        write_hook_file(live, "working 1780000000");
+        write_hook_file(dead, "idle 1780000000");
 
         let live_set: HashSet<&str> = [live].into_iter().collect();
         cleanup_hook_files(&live_set);
 
         assert!(std::path::Path::new(&format!("{}/{}", HOOK_DIR, live)).exists());
-        assert!(!std::path::Path::new(&format!("{}/{}", HOOK_DIR, stale)).exists());
+        assert!(!std::path::Path::new(&format!("{}/{}", HOOK_DIR, dead)).exists());
 
         remove_hook_file(live);
     }

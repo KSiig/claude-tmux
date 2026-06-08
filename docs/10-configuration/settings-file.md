@@ -1,6 +1,6 @@
 # Settings file
 
-claude-tmux uses a JSON settings file. No configuration is required -- defaults work out of the box.
+claude-tmux uses a JSON settings file. No configuration is required -- defaults work out of the box. Run `claude-tmux init` to interactively configure detection method and install the daemon service.
 
 ## Settings file locations
 
@@ -26,12 +26,15 @@ Shipped in `settings.json` at the repo root. Intentionally simple:
 
 ## Power-user example
 
-`~/.claude-tmux/settings.json` with grouping and Linear integration:
+`~/.claude-tmux/settings.json` with hooks detection, grouping, and Linear integration:
 
 ```json
 {
   "status_interval_ms": 150,
   "show_git_info": false,
+  "detection_method": "hooks",
+  "hook_staleness_secs": 90,
+  "done_delay_ms": 2000,
   "session_status_labels": false,
   "grouping": true,
   "task_integration": {
@@ -51,6 +54,9 @@ Shipped in `settings.json` at the repo root. Intentionally simple:
 |-----|------|---------|-------------|
 | `status_interval_ms` | integer | `500` | Milliseconds between status detection ticks. Min: `20` (values below are clamped). |
 | `show_git_info` | boolean | `true` | Show git branch and dirty indicators in the session list. |
+| `done_delay_ms` | integer | `2000` | How long a pane must stay Idle (ms) before transitioning to Done. |
+| `detection_method` | string | `"process"` | Detection backend: `"process"`, `"hooks"`, or `"sidecar"`. See [detection-method.md](../20-status-detection/detection-method.md). Set automatically by `claude-tmux init`. |
+| `hook_staleness_secs` | integer | `90` | Max age (seconds) of a hook file before the pane is treated as Unknown. Only applies to `"hooks"` and `"sidecar"` backends. |
 | `session_status_labels` | boolean | `true` | Show text labels next to session status icons (e.g. `* working` vs just `*`). |
 | `grouping` | boolean | `false` | Group sessions by shared name prefix (e.g. `VEL-420` and `VEL-420-556-ci` group together). |
 | `exclude_sessions` | array of strings | `[]` | Glob patterns for session names to hide from the list. Supports `*` and `?` wildcards. |
@@ -127,6 +133,8 @@ When both the manual titles file and API-fetched titles are available, both sour
 | User settings | `~/.claude-tmux/settings.json` | User overrides |
 | Repo settings | `<repo>/settings.json` | Defaults shipped with the repo |
 | Titles file | `~/.claude-tmux/titles.json` | Manual session-prefix-to-title mapping |
+| Hook script | `~/.claude-tmux/hooks/status.sh` | Hook script, created by `claude-tmux init` (hooks backend) |
+| Hook status files | `/tmp/claude-tmux-hooks/<pane_id>` | Per-pane status, written by hooks and sidecar backends |
 | Status file | `/tmp/claude-tmux-status` | Session counts, written by daemon only. See [headless-mode.md](../15-daemon/headless-mode.md). |
 | State file | `/tmp/claude-tmux-state` | Done/working-unfocused pane IDs, persisted across popup sessions |
 | Linear cache | `/tmp/claude-tmux-linear.json` | Cached Linear issue data, written by daemon |

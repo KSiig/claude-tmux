@@ -9,6 +9,9 @@ pub struct SessionGroup<'a> {
     /// Whether this group needs a plain separator line above it
     /// (headerless group that follows a headed group)
     pub separator: bool,
+    /// When true, strip the group label prefix from session display names.
+    /// Set for category-prefix groups (e.g. "skill-flush" under "skill" shows as "flush").
+    pub strip_prefix: bool,
 }
 
 impl<'a> SessionGroup<'a> {
@@ -68,12 +71,21 @@ pub fn group_sessions<'a>(
         } else {
             None
         };
+        let strip_prefix = label.as_ref().is_some_and(|l| {
+            !is_task_id(l)
+                && sessions.iter().all(|s| s.name != *l)
+                && sessions.iter().all(|s| {
+                    s.name.starts_with(l.as_str())
+                        && s.name.as_bytes().get(l.len()) == Some(&b'-')
+                })
+        });
         let title = label.as_ref().and_then(|k| titles.get(k).cloned());
         let group = SessionGroup {
             label,
             title,
             sessions,
             separator: false,
+            strip_prefix,
         };
         if group.label.is_some() {
             headed.push(group);
@@ -130,14 +142,24 @@ fn compute_group_key(name: &str, all_names: &[&str]) -> String {
     }
 
     // Find longest common prefix at a "-" boundary with any other session.
-    // Must contain at least one dash (two segments) to avoid over-grouping.
+    // Multi-segment prefixes (containing a dash) are always accepted.
+    // Single-segment prefixes are accepted only when neither name is a task ID,
+    // so that "skill-flush" and "skill-linear" group under "skill" but
+    // "VEL-419" and "VEL-420" do not merge under "VEL".
     let mut best_prefix = String::new();
     for other in all_names {
         if name == *other {
             continue;
         }
         let prefix = longest_common_prefix_at_dash(name, other);
-        if prefix.contains('-') && prefix.len() > best_prefix.len() {
+        let accept = if prefix.contains('-') {
+            true
+        } else if !prefix.is_empty() {
+            !is_task_id(name) && !is_task_id(other)
+        } else {
+            false
+        };
+        if accept && prefix.len() > best_prefix.len() {
             best_prefix = prefix;
         }
     }
@@ -394,5 +416,78 @@ mod tests {
         let first_headed = groups.iter().position(|g| g.label.is_some()).unwrap();
         let last_headerless = groups.iter().rposition(|g| g.label.is_none()).unwrap();
         assert!(last_headerless < first_headed, "all singletons should precede headed groups");
+    }
+
+    #[test]
+    fn category_prefix_grouping() {
+        let sessions = vec![
+            make_session("skill-flush"),
+            make_session("skill-linear"),
+            make_session("skill-orchestrate"),
+            make_session("tool-claude-tmux"),
+            make_session("tool-obsidian"),
+        ];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        assert_eq!(groups.len(), 2);
+
+        let skill = groups.iter().find(|g| g.label.as_deref() == Some("skill")).unwrap();
+        assert_eq!(skill.sessions.len(), 3);
+        assert!(skill.strip_prefix);
+
+        let tool = groups.iter().find(|g| g.label.as_deref() == Some("tool")).unwrap();
+        assert_eq!(tool.sessions.len(), 2);
+        assert!(tool.strip_prefix);
+    }
+
+    #[test]
+    fn category_prefix_does_not_merge_task_ids() {
+        let sessions = vec![
+            make_session("VEL-419"),
+            make_session("VEL-420"),
+            make_session("skill-flush"),
+            make_session("skill-linear"),
+        ];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        // Task IDs stay separate
+        assert!(groups.iter().any(|g| g.label.as_deref() == Some("VEL-419")));
+        assert!(groups.iter().any(|g| g.label.as_deref() == Some("VEL-420")));
+
+        // Skills group together with strip_prefix
+        let skill = groups.iter().find(|g| g.label.as_deref() == Some("skill")).unwrap();
+        assert_eq!(skill.sessions.len(), 2);
+        assert!(skill.strip_prefix);
+    }
+
+    #[test]
+    fn parent_session_prevents_strip_prefix() {
+        let sessions = vec![
+            make_session("skill"),
+            make_session("skill-flush"),
+            make_session("skill-linear"),
+        ];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        let skill = groups.iter().find(|g| g.label.as_deref() == Some("skill")).unwrap();
+        assert_eq!(skill.sessions.len(), 3);
+        assert!(!skill.strip_prefix);
+    }
+
+    #[test]
+    fn task_id_group_no_strip_prefix() {
+        let sessions = vec![
+            make_session("VEL-420"),
+            make_session("VEL-420-556-ci"),
+        ];
+        let refs: Vec<&Session> = sessions.iter().collect();
+        let groups = group_sessions(refs, &no_titles());
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].label.as_deref(), Some("VEL-420"));
+        assert!(!groups[0].strip_prefix);
     }
 }

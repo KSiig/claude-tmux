@@ -14,9 +14,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 
-use crate::detection::{content_above_status_bar, detect_static_status, detect_status};
+use crate::detection::{self, DetectionBackend, DetectionContext, DetectionMethod};
 use crate::git::{self, GitContext, PullRequestInfo};
-use crate::hooks;
 use crate::scroll_state::ScrollState;
 use crate::session::{ClaudeCodeStatus, Session};
 use crate::settings::{glob_match, Settings};
@@ -62,8 +61,10 @@ pub struct App {
     pub pr_info: Option<PullRequestInfo>,
     /// Scroll state for the session list
     pub scroll_state: ScrollState,
-    /// Cache of last captured content per pane ID, used for content-change status detection
-    pane_content_cache: HashMap<String, String>,
+    /// Detection backend (process-tree, hooks, or sidecar)
+    backend: Box<dyn DetectionBackend>,
+    /// Which detection method is active
+    detection_method: DetectionMethod,
     /// Pane IDs that have been Working while unfocused, used to detect Done transitions
     worked_unfocused: HashSet<String>,
     /// Pane IDs that have transitioned to Done (persisted across popup sessions)
@@ -78,10 +79,6 @@ pub struct App {
     pub group_titles: HashMap<String, String>,
     /// Whether to show git branch and dirty-star in the session list
     pub show_git_info: bool,
-    /// Tracks when parsing first started disagreeing with hook status per pane
-    parse_disagree_since: HashMap<String, Instant>,
-    /// How long parsing must consistently disagree before overriding hook status
-    hook_override_delay: Duration,
     /// Tracks when each pane first became Idle after being in worked_unfocused
     idle_since: HashMap<String, Instant>,
     /// How long a pane must remain Idle before transitioning to Done
@@ -102,6 +99,10 @@ pub struct App {
     pub linear_statuses: HashMap<String, crate::linear::IssueStatus>,
     /// Glob patterns for session names to exclude from the list
     exclude_sessions: Vec<String>,
+    /// Pane IDs with active sidecars (sidecar backend only)
+    sidecar_tracked: HashSet<String>,
+    /// When each pane entered its current status (pane_id -> unix timestamp)
+    pub status_since: HashMap<String, u64>,
 }
 
 impl App {
@@ -117,7 +118,7 @@ impl App {
         let settings = Settings::load();
         let sessions = Tmux::list_sessions()?;
         let current_session = Tmux::current_session()?;
-        let (worked_unfocused, done_panes) = Self::read_state_file();
+        let (worked_unfocused, done_panes, status_since) = Self::read_state_file();
 
         let (task_show_titles, task_show_status, task_status_labels, task_issue_prefix) =
             match &settings.task_integration {
@@ -147,6 +148,11 @@ impl App {
             .filter(|s| !settings.is_session_excluded(&s.name))
             .collect();
 
+        let backend = detection::create_backend(
+            settings.detection_method,
+            settings.hook_staleness_secs,
+        );
+
         let mut app = Self {
             sessions,
             selected: 0,
@@ -162,7 +168,8 @@ impl App {
             pending_action: None,
             pr_info: None,
             scroll_state: ScrollState::new(),
-            pane_content_cache: HashMap::new(),
+            backend,
+            detection_method: settings.detection_method,
             worked_unfocused,
             done_panes,
             last_status_tick: Instant::now() - Duration::from_secs(1),
@@ -170,8 +177,6 @@ impl App {
             status_interval: settings.status_interval,
             group_titles,
             show_git_info: settings.show_git_info,
-            parse_disagree_since: HashMap::new(),
-            hook_override_delay: settings.hook_override_delay,
             idle_since: HashMap::new(),
             done_delay: settings.done_delay,
             session_status_labels: settings.session_status_labels,
@@ -182,6 +187,8 @@ impl App {
             task_issue_prefix,
             linear_statuses,
             exclude_sessions,
+            sidecar_tracked: HashSet::new(),
+            status_since,
         };
 
         app.apply_persisted_done();
@@ -222,80 +229,58 @@ impl App {
         });
     }
 
-    /// Refresh Claude Code status for all panes using content-change detection.
+    /// Refresh Claude Code status for all panes using the configured backend.
     ///
     /// Called on every main-loop iteration but self-throttles to run at most
-    /// every 500 ms. Compares the current pane capture against the previous
-    /// one: if the content changed the session is Working; if it is the same
-    /// we fall back to static text inspection for Idle / WaitingInput / Unknown.
+    /// every `status_interval` (default 500ms). Delegates detection to the
+    /// configured backend (process-tree, hooks, or sidecar) and layers the
+    /// Done lifecycle on top.
     pub fn tick_status(&mut self) {
         if self.last_status_tick.elapsed() < self.status_interval {
             return;
         }
         self.last_status_tick = Instant::now();
 
-        // Collect (session_index, pane_id) first to satisfy the borrow checker.
-        let targets: Vec<(usize, String)> = self
+        self.backend.tick_start();
+
+        let needs_content = self.backend.needs_content();
+
+        // Collect targets: (session_index, pane_id, pane_pid)
+        let targets: Vec<(usize, String, Option<u32>)> = self
             .sessions
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| s.claude_code_pane.as_ref().map(|id| (i, id.clone())))
+            .filter_map(|(i, s)| {
+                s.claude_code_pane.as_ref().map(|id| {
+                    let pid = s.panes.iter()
+                        .find(|p| p.id == *id)
+                        .and_then(|p| p.pid);
+                    (i, id.clone(), pid)
+                })
+            })
             .collect();
 
-        let mut had_first_observation = false;
+        // For sidecar backend: ensure sidecars are running for all claude panes
+        if self.detection_method == DetectionMethod::Sidecar {
+            let pane_ids: Vec<String> = targets.iter().map(|(_, id, _)| id.clone()).collect();
+            detection::sidecar::ensure_sidecars(&pane_ids, &mut self.sidecar_tracked);
+        }
 
-        for (idx, pane_id) in targets {
-            let Ok(content) = Tmux::capture_pane(&pane_id, 15, true) else {
-                continue;
+        for (idx, pane_id, pane_pid) in targets {
+            let content = if needs_content {
+                Tmux::capture_pane(&pane_id, 15, true).ok()
+            } else {
+                None
             };
 
-            let comparable = content_above_status_bar(&content);
-            let first_observation = !self.pane_content_cache.contains_key(&pane_id);
-            had_first_observation |= first_observation;
-            let parsed_status = match self.pane_content_cache.get(&pane_id) {
-                Some(prev) if content_above_status_bar(prev) != comparable => ClaudeCodeStatus::Working,
-                Some(_) => detect_static_status(&content),
-                None => detect_status(&content),
+            let ctx = DetectionContext {
+                pane_pid,
+                pane_content: content.as_deref(),
             };
 
-            let raw_status = match hooks::read_hook_status(&pane_id) {
-                Some((hook_status, ts)) => {
-                    if hook_status == parsed_status {
-                        self.parse_disagree_since.remove(&pane_id);
-                        hook_status
-                    } else {
-                        let now_epoch = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0);
-                        let hook_age = Duration::from_secs(now_epoch.saturating_sub(ts));
+            let raw_status = self.backend.detect(&pane_id, &ctx);
 
-                        if hook_age >= self.hook_override_delay {
-                            self.parse_disagree_since.remove(&pane_id);
-                            parsed_status
-                        } else {
-                            let disagree_start = self
-                                .parse_disagree_since
-                                .entry(pane_id.clone())
-                                .or_insert_with(Instant::now);
-                            if disagree_start.elapsed() >= self.hook_override_delay {
-                                parsed_status
-                            } else {
-                                hook_status
-                            }
-                        }
-                    }
-                }
-                None => {
-                    self.parse_disagree_since.remove(&pane_id);
-                    parsed_status
-                }
-            };
-
-            // In daemon mode, the attached session is directly visible to
-            // the user — no need to track Done for it. In popup mode, the
-            // user is viewing the popup overlay, not the session, so nothing
-            // should be considered focused.
+            // Done lifecycle: shared across all backends
             let is_focused = self.writes_status_file && self.sessions[idx].attached;
 
             if raw_status == ClaudeCodeStatus::Working && !is_focused {
@@ -305,16 +290,18 @@ impl App {
                 self.worked_unfocused.remove(&pane_id);
                 self.done_panes.remove(&pane_id);
             }
-
             if raw_status != ClaudeCodeStatus::Idle {
                 self.idle_since.remove(&pane_id);
+                self.done_panes.remove(&pane_id);
             }
 
-            let status = if first_observation && raw_status == ClaudeCodeStatus::Idle && !self.done_panes.contains(&pane_id) {
-                self.worked_unfocused.remove(&pane_id);
-                ClaudeCodeStatus::Idle
-            } else if !first_observation && raw_status == ClaudeCodeStatus::Idle && self.worked_unfocused.contains(&pane_id) {
-                let idle_start = self.idle_since.entry(pane_id.clone()).or_insert_with(Instant::now);
+            let status = if raw_status == ClaudeCodeStatus::Idle
+                && self.worked_unfocused.contains(&pane_id)
+            {
+                let idle_start = self
+                    .idle_since
+                    .entry(pane_id.clone())
+                    .or_insert_with(Instant::now);
                 if idle_start.elapsed() >= self.done_delay {
                     self.worked_unfocused.remove(&pane_id);
                     self.idle_since.remove(&pane_id);
@@ -323,18 +310,26 @@ impl App {
                 } else {
                     ClaudeCodeStatus::Idle
                 }
-            } else if raw_status == ClaudeCodeStatus::Idle && self.done_panes.contains(&pane_id) && !is_focused {
+            } else if raw_status == ClaudeCodeStatus::Idle
+                && self.done_panes.contains(&pane_id)
+                && !is_focused
+            {
                 ClaudeCodeStatus::Done
             } else {
                 raw_status
             };
 
+            let old_status = self.sessions[idx].claude_code_status;
+            let now_epoch = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if status != old_status {
+                self.status_since.insert(pane_id.clone(), now_epoch);
+            } else {
+                self.status_since.entry(pane_id.clone()).or_insert(now_epoch);
+            }
             self.sessions[idx].claude_code_status = status;
-            self.pane_content_cache.insert(pane_id, content);
-        }
-
-        if had_first_observation {
-            self.last_status_tick -= self.status_interval.saturating_sub(Duration::from_millis(20));
         }
 
         self.prune_stale_panes();
@@ -355,25 +350,31 @@ impl App {
             .collect();
         self.worked_unfocused.retain(|id| live.contains(id.as_str()));
         self.done_panes.retain(|id| live.contains(id.as_str()));
-        self.parse_disagree_since
-            .retain(|id, _| live.contains(id.as_str()));
         self.idle_since.retain(|id, _| live.contains(id.as_str()));
-        hooks::cleanup_hook_files(&live);
+        self.status_since.retain(|id, _| live.contains(id.as_str()));
+        detection::hooks::cleanup_hook_files(&live);
     }
 
-    fn read_state_file() -> (HashSet<String>, HashSet<String>) {
+    fn read_state_file() -> (HashSet<String>, HashSet<String>, HashMap<String, u64>) {
         let mut worked = HashSet::new();
         let mut done = HashSet::new();
+        let mut since = HashMap::new();
         if let Ok(content) = std::fs::read_to_string(Self::STATE_FILE) {
             for line in content.lines() {
                 if let Some(id) = line.strip_prefix("w:") {
                     worked.insert(id.to_string());
                 } else if let Some(id) = line.strip_prefix("d:") {
                     done.insert(id.to_string());
+                } else if let Some(rest) = line.strip_prefix("s:") {
+                    if let Some((id, ts)) = rest.split_once(' ') {
+                        if let Ok(t) = ts.parse::<u64>() {
+                            since.insert(id.to_string(), t);
+                        }
+                    }
                 }
             }
         }
-        (worked, done)
+        (worked, done, since)
     }
 
     fn write_state_file(&self) {
@@ -386,6 +387,13 @@ impl App {
         for id in &self.done_panes {
             content.push_str("d:");
             content.push_str(id);
+            content.push('\n');
+        }
+        for (id, ts) in &self.status_since {
+            content.push_str("s:");
+            content.push_str(id);
+            content.push(' ');
+            content.push_str(&ts.to_string());
             content.push('\n');
         }
         let _ = std::fs::write(Self::STATE_FILE, content);
@@ -445,7 +453,6 @@ impl App {
 
     /// Refresh sessions without affecting messages (for use after git operations)
     fn refresh_sessions(&mut self) -> bool {
-        self.pane_content_cache.clear();
         match Tmux::list_sessions() {
             Ok(sessions) => {
                 self.sessions = self.filter_excluded(sessions);
@@ -506,6 +513,7 @@ impl App {
                     title: None,
                     sessions: vec![s],
                     separator: false,
+                    strip_prefix: false,
                 })
                 .collect();
         }
