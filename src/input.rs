@@ -81,9 +81,9 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.toggle_hide_group();
         }
 
-        // Unhide all groups
+        // Unhide group (selected collapsed header, or all)
         KeyCode::Char('U') => {
-            app.unhide_all_groups();
+            app.unhide_groups();
         }
 
         // Help

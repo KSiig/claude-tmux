@@ -28,6 +28,8 @@ pub fn render_help(frame: &mut Frame, task_integration_active: bool) {
         Line::raw("  r           Rename session"),
         Line::raw("  /           Filter sessions"),
         Line::raw("  R           Refresh list"),
+        Line::raw("  H           Hide group"),
+        Line::raw("  U           Unhide group (or all)"),
         Line::raw(""),
         Line::from(Span::styled(
             "Action Menu",

@@ -152,9 +152,11 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let groups = app.grouped_filtered_sessions();
 
-    let all_sessions: Vec<_> = groups.iter().flat_map(|g| &g.sessions).copied().collect();
+    let has_navigable = groups.iter().any(|g| {
+        !g.sessions.is_empty() || (g.hidden_count > 0 && g.label.is_some())
+    });
 
-    if all_sessions.is_empty() {
+    if !has_navigable {
         let empty_msg = if app.filter.is_empty() {
             "No tmux sessions found. Press 'n' to create one."
         } else {
@@ -193,8 +195,11 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut items: Vec<ListItem> = Vec::new();
     let mut session_idx = 0;
+    let mut nav_idx = 0;
 
     for group in &groups {
+        let is_collapsed = group.hidden_count > 0 && group.sessions.is_empty();
+
         if let Some(ref label) = group.label {
             let linear_status = if app.task_show_status {
                 app.linear_statuses.get(label)
@@ -206,9 +211,17 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 None
             };
+            let is_selected = is_collapsed && nav_idx == app.selected;
             let header_line =
-                render_group_header(label, title, linear_status, app.task_status_labels, area.width, group.hidden_count);
-            items.push(ListItem::new(header_line));
+                render_group_header(label, title, linear_status, app.task_status_labels, area.width, group.hidden_count, is_selected);
+            let mut item = ListItem::new(header_line);
+            if is_selected {
+                item = item.style(Style::default().bg(Color::DarkGray));
+            }
+            items.push(item);
+            if is_collapsed {
+                nav_idx += 1;
+            }
         } else if group.separator {
             let sep = "─".repeat(area.width as usize);
             items.push(ListItem::new(Line::from(
@@ -219,8 +232,10 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
         for session in &group.sessions {
             let i = session_idx;
             session_idx += 1;
+            let current_nav = nav_idx;
+            nav_idx += 1;
 
-            let is_selected = i == app.selected;
+            let is_selected = current_nav == app.selected;
             let is_current = app
                 .current_session
                 .as_ref()
@@ -363,8 +378,10 @@ fn render_group_header<'a>(
     status_labels: bool,
     width: u16,
     hidden_count: usize,
+    is_selected: bool,
 ) -> Line<'a> {
-    let prefix = "── ";
+    let marker = if is_selected { " ▸ " } else { "" };
+    let prefix = if is_selected { "─ " } else { "── " };
     let title_part = match title {
         Some(t) => format!(" — {}", t),
         None => String::new(),
@@ -379,12 +396,14 @@ fn render_group_header<'a>(
         Some(s) => format!("{} ", linear_state_symbol(&s.state_type)),
         None => String::new(),
     };
-    let used = prefix.len() + status_text.len() + label.len() + title_part.len() + hidden_part.len() + 2;
+    let used = marker.len() + prefix.len() + status_text.len() + label.len() + title_part.len() + hidden_part.len() + 2;
     let dashes_right = "─".repeat((width as usize).saturating_sub(used).max(1));
 
-    let mut spans = vec![
-        Span::styled(prefix, Style::default().fg(Color::DarkGray)),
-    ];
+    let mut spans = Vec::new();
+    if is_selected {
+        spans.push(Span::styled(marker, Style::default().fg(Color::White)));
+    }
+    spans.push(Span::styled(prefix.to_string(), Style::default().fg(Color::DarkGray)));
     if let Some(s) = linear_status {
         let color = linear_state_color(&s.state_type);
         spans.push(Span::styled(
@@ -392,7 +411,7 @@ fn render_group_header<'a>(
             Style::default().fg(color),
         ));
     }
-    let label_color = if hidden_count > 0 { Color::DarkGray } else { Color::Cyan };
+    let label_color = if is_selected { Color::White } else if hidden_count > 0 { Color::DarkGray } else { Color::Cyan };
     spans.push(Span::styled(
         label.to_string(),
         Style::default()

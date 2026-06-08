@@ -31,6 +31,13 @@ pub use mode::{
 // Use helpers internally
 use helpers::{default_worktree_path, expand_path, sanitize_for_session_name};
 
+/// An item in the navigable list: either a session or a collapsed group header.
+#[derive(Debug, Clone)]
+pub enum NavItem {
+    Session(usize),
+    CollapsedGroup { label: String },
+}
+
 /// Main application state
 pub struct App {
     /// All discovered sessions
@@ -460,9 +467,10 @@ impl App {
         match Tmux::list_sessions() {
             Ok(sessions) => {
                 self.sessions = self.filter_excluded(sessions);
-                // Ensure selected index is still valid
-                if self.selected >= self.sessions.len() && !self.sessions.is_empty() {
-                    self.selected = self.sessions.len() - 1;
+                // Ensure selected index is still valid against navigable items
+                let nav_count = self.navigable_items().len();
+                if nav_count > 0 && self.selected >= nav_count {
+                    self.selected = nav_count - 1;
                 }
                 self.update_preview();
                 true
@@ -540,37 +548,80 @@ impl App {
         groups
     }
 
-    /// Count how many group headers appear before the selected session index.
-    fn headers_before(&self, selected: usize) -> usize {
+    /// Build the ordered list of navigable items (sessions + collapsed group headers).
+    pub fn navigable_items(&self) -> Vec<NavItem> {
         let groups = self.grouped_filtered_sessions();
+        let mut items = Vec::new();
         let mut session_idx = 0;
-        let mut extra_lines = 0;
         for group in &groups {
-            if session_idx > selected {
-                break;
+            if group.hidden_count > 0 && group.sessions.is_empty() {
+                if let Some(ref label) = group.label {
+                    items.push(NavItem::CollapsedGroup { label: label.clone() });
+                }
             }
-            extra_lines += group.non_session_lines();
-            session_idx += group.sessions.len();
+            for _ in &group.sessions {
+                items.push(NavItem::Session(session_idx));
+                session_idx += 1;
+            }
         }
-        extra_lines
+        items
     }
 
-    fn total_headers(&self) -> usize {
+    /// Count non-navigable lines (expanded group headers, separators) before a nav index.
+    fn non_navigable_lines_before(&self, nav_selected: usize) -> usize {
+        let groups = self.grouped_filtered_sessions();
+        let mut nav_idx = 0;
+        let mut extra = 0;
+        for group in &groups {
+            if nav_idx > nav_selected {
+                break;
+            }
+            let is_collapsed = group.hidden_count > 0 && group.sessions.is_empty();
+            if is_collapsed {
+                // Collapsed header is a nav item, not an extra line
+                nav_idx += 1;
+            } else {
+                extra += group.non_session_lines();
+                nav_idx += group.sessions.len();
+            }
+        }
+        extra
+    }
+
+    fn total_non_navigable_lines(&self) -> usize {
         self.grouped_filtered_sessions()
             .iter()
-            .map(|g| g.non_session_lines())
+            .map(|g| {
+                let is_collapsed = g.hidden_count > 0 && g.sessions.is_empty();
+                if is_collapsed { 0 } else { g.non_session_lines() }
+            })
             .sum()
     }
 
-    /// Get the currently selected session
+    /// Get the currently selected session (None if a collapsed header is selected)
     pub fn selected_session(&self) -> Option<&Session> {
-        let ordered = self.display_ordered_sessions();
-        ordered.get(self.selected).copied()
+        let nav = self.navigable_items();
+        match nav.get(self.selected) {
+            Some(NavItem::Session(i)) => {
+                let ordered = self.display_ordered_sessions();
+                ordered.get(*i).copied()
+            }
+            _ => None,
+        }
+    }
+
+    /// Get the label of the selected collapsed group header, if any
+    pub fn selected_collapsed_group(&self) -> Option<String> {
+        let nav = self.navigable_items();
+        match nav.get(self.selected) {
+            Some(NavItem::CollapsedGroup { label }) => Some(label.clone()),
+            _ => None,
+        }
     }
 
     /// Move selection up
     pub fn select_prev(&mut self) {
-        let count = self.display_ordered_sessions().len();
+        let count = self.navigable_items().len();
         if count > 0 && self.selected > 0 {
             self.selected -= 1;
             self.update_preview();
@@ -579,7 +630,7 @@ impl App {
 
     /// Move selection down
     pub fn select_next(&mut self) {
-        let count = self.display_ordered_sessions().len();
+        let count = self.navigable_items().len();
         if count > 0 && self.selected < count - 1 {
             self.selected += 1;
             self.update_preview();
@@ -613,9 +664,8 @@ impl App {
 
     /// Get the index into self.sessions for the currently selected filtered session
     fn selected_session_index(&self) -> Option<usize> {
-        let ordered = self.display_ordered_sessions();
-        let session = ordered.get(self.selected)?;
-        self.sessions.iter().position(|s| std::ptr::eq(s, *session))
+        let session = self.selected_session()?;
+        self.sessions.iter().position(|s| std::ptr::eq(s, session))
     }
 
     // =========================================================================
@@ -1437,7 +1487,7 @@ impl App {
             self.message = Some(format!("Unhid group '{}'", group_key));
         } else {
             self.hidden_groups.insert(group_key.clone());
-            let count = self.display_ordered_sessions().len();
+            let count = self.navigable_items().len();
             if self.selected >= count && count > 0 {
                 self.selected = count - 1;
             }
@@ -1447,16 +1497,22 @@ impl App {
         self.update_preview();
     }
 
-    /// Unhide all hidden groups
-    pub fn unhide_all_groups(&mut self) {
+    /// Unhide selected collapsed group, or all hidden groups if on a session
+    pub fn unhide_groups(&mut self) {
         self.clear_messages();
         if self.hidden_groups.is_empty() {
             return;
         }
-        let count = self.hidden_groups.len();
-        self.hidden_groups.clear();
-        grouping::save_hidden_groups(&self.hidden_groups);
-        self.message = Some(format!("Unhid {} group(s)", count));
+        if let Some(label) = self.selected_collapsed_group() {
+            self.hidden_groups.remove(&label);
+            grouping::save_hidden_groups(&self.hidden_groups);
+            self.message = Some(format!("Unhid group '{}'", label));
+        } else {
+            let count = self.hidden_groups.len();
+            self.hidden_groups.clear();
+            grouping::save_hidden_groups(&self.hidden_groups);
+            self.message = Some(format!("Unhid {} group(s)", count));
+        }
         self.update_preview();
     }
 
@@ -1746,12 +1802,12 @@ impl App {
     /// to show metadata and action items. This method computes the index
     /// into the flat list of rendered items.
     pub fn compute_flat_list_index(&self) -> usize {
-        let filtered_count = self.display_ordered_sessions().len();
-        if filtered_count == 0 {
+        let nav_count = self.navigable_items().len();
+        if nav_count == 0 {
             return 0;
         }
 
-        let header_offset = self.headers_before(self.selected);
+        let header_offset = self.non_navigable_lines_before(self.selected);
 
         match self.mode {
             Mode::ActionMenu => {
@@ -1781,16 +1837,16 @@ impl App {
     ///
     /// This accounts for the expanded content when in ActionMenu mode.
     pub fn compute_total_list_items(&self) -> usize {
-        let filtered_count = self.display_ordered_sessions().len();
-        if filtered_count == 0 {
+        let nav_count = self.navigable_items().len();
+        if nav_count == 0 {
             return 0;
         }
 
-        let header_count = self.total_headers();
+        let non_nav_lines = self.total_non_navigable_lines();
 
         match self.mode {
             Mode::ActionMenu => {
-                let mut total = filtered_count + header_count;
+                let mut total = nav_count + non_nav_lines;
 
                 total += 1; // metadata row
 
@@ -1810,7 +1866,7 @@ impl App {
 
                 total
             }
-            _ => filtered_count + header_count,
+            _ => nav_count + non_nav_lines,
         }
     }
 }
