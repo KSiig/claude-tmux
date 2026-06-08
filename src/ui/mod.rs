@@ -207,7 +207,7 @@ fn render_session_list(frame: &mut Frame, app: &mut App, area: Rect) {
                 None
             };
             let header_line =
-                render_group_header(label, title, linear_status, app.task_status_labels, area.width);
+                render_group_header(label, title, linear_status, app.task_status_labels, area.width, group.hidden_count);
             items.push(ListItem::new(header_line));
         } else if group.separator {
             let sep = "─".repeat(area.width as usize);
@@ -362,18 +362,24 @@ fn render_group_header<'a>(
     linear_status: Option<&crate::linear::IssueStatus>,
     status_labels: bool,
     width: u16,
+    hidden_count: usize,
 ) -> Line<'a> {
     let prefix = "── ";
     let title_part = match title {
         Some(t) => format!(" — {}", t),
         None => String::new(),
     };
+    let hidden_part = if hidden_count > 0 {
+        format!(" ({} hidden)", hidden_count)
+    } else {
+        String::new()
+    };
     let status_text = match linear_status {
         Some(s) if status_labels => format!("{} {} ", linear_state_symbol(&s.state_type), s.state_name),
         Some(s) => format!("{} ", linear_state_symbol(&s.state_type)),
         None => String::new(),
     };
-    let used = prefix.len() + status_text.len() + label.len() + title_part.len() + 2;
+    let used = prefix.len() + status_text.len() + label.len() + title_part.len() + hidden_part.len() + 2;
     let dashes_right = "─".repeat((width as usize).saturating_sub(used).max(1));
 
     let mut spans = vec![
@@ -386,15 +392,22 @@ fn render_group_header<'a>(
             Style::default().fg(color),
         ));
     }
+    let label_color = if hidden_count > 0 { Color::DarkGray } else { Color::Cyan };
     spans.push(Span::styled(
         label.to_string(),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(label_color)
             .add_modifier(Modifier::BOLD),
     ));
     if let Some(t) = title {
         spans.push(Span::styled(
             format!(" — {}", t),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    if hidden_count > 0 {
+        spans.push(Span::styled(
+            hidden_part,
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -742,6 +755,13 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
+    if !app.hidden_groups.is_empty() {
+        spans.push(Span::styled(
+            format!("  {} hidden", app.hidden_groups.len()),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
     if !app.filter.is_empty() {
         spans.push(Span::styled(
             format!("  filter: \"{}\"", app.filter),
@@ -756,7 +776,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.mode {
         Mode::Normal => {
-            "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  R reload  / filter  q quit"
+            "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  H hide  U unhide  R reload  / filter  q quit"
         }
         Mode::ActionMenu => "  jk navigate  ⏎/l select  h/esc back  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",

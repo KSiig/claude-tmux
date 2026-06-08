@@ -103,6 +103,8 @@ pub struct App {
     sidecar_tracked: HashSet<String>,
     /// When each pane entered its current status (pane_id -> unix timestamp)
     pub status_since: HashMap<String, u64>,
+    /// Group labels that are hidden (collapsed) in the session list
+    pub hidden_groups: HashSet<String>,
 }
 
 impl App {
@@ -142,6 +144,7 @@ impl App {
             HashMap::new()
         };
 
+        let hidden_groups = grouping::load_hidden_groups();
         let exclude_sessions = settings.exclude_sessions.clone();
         let sessions = sessions
             .into_iter()
@@ -189,6 +192,7 @@ impl App {
             exclude_sessions,
             sidecar_tracked: HashSet::new(),
             status_since,
+            hidden_groups,
         };
 
         app.apply_persisted_done();
@@ -505,19 +509,35 @@ impl App {
     /// Multi-member groups get a label (rendered as a header); singletons do not.
     pub fn grouped_filtered_sessions(&self) -> Vec<grouping::SessionGroup<'_>> {
         if !self.grouping_enabled {
-            return self
-                .filtered_sessions()
+            let filtered = self.filtered_sessions();
+            return filtered
                 .into_iter()
+                .filter(|s| {
+                    !self.hidden_groups.contains(&s.name)
+                })
                 .map(|s| grouping::SessionGroup {
                     label: None,
                     title: None,
                     sessions: vec![s],
                     separator: false,
                     strip_prefix: false,
+                    hidden_count: 0,
                 })
                 .collect();
         }
-        grouping::group_sessions(self.filtered_sessions(), &self.group_titles)
+        let mut groups = grouping::group_sessions(self.filtered_sessions(), &self.group_titles);
+        if !self.hidden_groups.is_empty() {
+            for group in &mut groups {
+                let key = group.label.as_deref().unwrap_or_else(|| {
+                    group.sessions.first().map(|s| s.name.as_str()).unwrap_or("")
+                });
+                if self.hidden_groups.contains(key) {
+                    group.hidden_count = group.sessions.len();
+                    group.sessions.clear();
+                }
+            }
+        }
+        groups
     }
 
     /// Count how many group headers appear before the selected session index.
@@ -1399,6 +1419,45 @@ impl App {
     pub fn clear_filter(&mut self) {
         self.filter.clear();
         self.selected = 0;
+    }
+
+    /// Toggle hiding the group of the currently selected session
+    pub fn toggle_hide_group(&mut self) {
+        self.clear_messages();
+        let names: Vec<String> = self.session_names();
+        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        let group_key = grouping::group_key_for_session(&session.name, &name_refs);
+
+        if self.hidden_groups.contains(&group_key) {
+            self.hidden_groups.remove(&group_key);
+            self.message = Some(format!("Unhid group '{}'", group_key));
+        } else {
+            self.hidden_groups.insert(group_key.clone());
+            let count = self.display_ordered_sessions().len();
+            if self.selected >= count && count > 0 {
+                self.selected = count - 1;
+            }
+            self.message = Some(format!("Hid group '{}'", group_key));
+        }
+        grouping::save_hidden_groups(&self.hidden_groups);
+        self.update_preview();
+    }
+
+    /// Unhide all hidden groups
+    pub fn unhide_all_groups(&mut self) {
+        self.clear_messages();
+        if self.hidden_groups.is_empty() {
+            return;
+        }
+        let count = self.hidden_groups.len();
+        self.hidden_groups.clear();
+        grouping::save_hidden_groups(&self.hidden_groups);
+        self.message = Some(format!("Unhid {} group(s)", count));
+        self.update_preview();
     }
 
     /// Show help

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::session::Session;
 
@@ -12,6 +12,8 @@ pub struct SessionGroup<'a> {
     /// When true, strip the group label prefix from session display names.
     /// Set for category-prefix groups (e.g. "skill-flush" under "skill" shows as "flush").
     pub strip_prefix: bool,
+    /// Number of sessions hidden by group collapse (0 when visible)
+    pub hidden_count: usize,
 }
 
 impl<'a> SessionGroup<'a> {
@@ -24,6 +26,33 @@ impl<'a> SessionGroup<'a> {
             0
         }
     }
+}
+
+pub fn group_key_for_session(session_name: &str, all_names: &[&str]) -> String {
+    compute_group_key(session_name, all_names)
+}
+
+pub fn load_hidden_groups() -> HashSet<String> {
+    let Some(home) = dirs::home_dir() else {
+        return HashSet::new();
+    };
+    let path = home.join(".claude-tmux").join("hidden-groups.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_hidden_groups(groups: &HashSet<String>) {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let dir = home.join(".claude-tmux");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(
+        dir.join("hidden-groups.json"),
+        serde_json::to_string(groups).unwrap_or_default(),
+    );
 }
 
 pub fn load_titles() -> HashMap<String, String> {
@@ -86,6 +115,7 @@ pub fn group_sessions<'a>(
             sessions,
             separator: false,
             strip_prefix,
+            hidden_count: 0,
         };
         if group.label.is_some() {
             headed.push(group);

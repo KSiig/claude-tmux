@@ -76,6 +76,16 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.refresh();
         }
 
+        // Hide group
+        KeyCode::Char('H') => {
+            app.toggle_hide_group();
+        }
+
+        // Unhide all groups
+        KeyCode::Char('U') => {
+            app.unhide_all_groups();
+        }
+
         // Help
         KeyCode::Char('?') => {
             app.show_help();
