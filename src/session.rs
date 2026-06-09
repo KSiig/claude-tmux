@@ -33,6 +33,17 @@ impl ClaudeCodeStatus {
         }
     }
 
+    pub fn sort_priority(&self) -> u8 {
+        match self {
+            ClaudeCodeStatus::WaitingInput => 0,
+            ClaudeCodeStatus::Done => 1,
+            ClaudeCodeStatus::Working => 2,
+            ClaudeCodeStatus::Error => 3,
+            ClaudeCodeStatus::Idle => 4,
+            ClaudeCodeStatus::Unknown => 5,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             ClaudeCodeStatus::Idle => "idle",

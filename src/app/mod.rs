@@ -500,7 +500,12 @@ impl App {
                 })
                 .collect()
         };
-        sessions.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        sessions.sort_by(|a, b| {
+            a.claude_code_status
+                .sort_priority()
+                .cmp(&b.claude_code_status.sort_priority())
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
         sessions
     }
 
