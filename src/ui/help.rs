@@ -26,6 +26,7 @@ pub fn render_help(frame: &mut Frame, task_integration_active: bool) {
         Line::raw("  n           New session"),
         Line::raw("  K           Kill session"),
         Line::raw("  r           Rename session"),
+        Line::raw("  S           Set status"),
         Line::raw("  /           Filter sessions"),
         Line::raw("  R           Refresh list"),
         Line::raw("  H           Hide group"),

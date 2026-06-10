@@ -18,6 +18,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::NewWorktree { .. } => handle_new_worktree_mode(app, key),
         Mode::CreatePullRequest { .. } => handle_create_pr_mode(app, key),
         Mode::Help => handle_help_mode(app, key),
+        Mode::SetStatus { .. } => handle_set_status_mode(app, key),
     }
 }
 
@@ -84,6 +85,11 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         // Unhide group (selected collapsed header, or all)
         KeyCode::Char('U') => {
             app.unhide_groups();
+        }
+
+        // Set status
+        KeyCode::Char('S') => {
+            app.start_set_status();
         }
 
         // Help
@@ -514,6 +520,24 @@ fn handle_create_pr_mode(app: &mut App, key: KeyEvent) {
                     }
                 }
             }
+        }
+        _ => {}
+    }
+}
+
+fn handle_set_status_mode(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.select_next_status();
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.select_prev_status();
+        }
+        KeyCode::Enter => {
+            app.confirm_set_status();
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.cancel();
         }
         _ => {}
     }

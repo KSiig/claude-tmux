@@ -110,6 +110,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Mode::Help => {
             help::render_help(frame, app.task_show_status);
         }
+        Mode::SetStatus { selected } => {
+            let current = app
+                .selected_session()
+                .map(|s| s.claude_code_status)
+                .unwrap_or_default();
+            dialogs::render_set_status_dialog(frame, *selected, current);
+        }
         Mode::Normal | Mode::ActionMenu => {}
     }
 
@@ -841,7 +848,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let hints = match app.mode {
         Mode::Normal => {
-            "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  H hide  U unhide  R reload  / filter  q quit"
+            "  ? help  jk navigate  l actions  ⏎ switch  n new  K kill  S status  H hide  U unhide  R reload  / filter  q quit"
         }
         Mode::ActionMenu => "  jk navigate  ⏎/l select  h/esc back  q quit",
         Mode::Filter { .. } => "  ⏎ apply  esc cancel",
@@ -851,6 +858,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::Commit { .. } => "  ⏎ commit  esc cancel",
         Mode::NewWorktree { .. } => "  ⏎ create  tab switch  ↑↓ select  → accept  esc cancel",
         Mode::CreatePullRequest { .. } => "  ⏎ create PR  tab switch  esc cancel",
+        Mode::SetStatus { .. } => "  jk navigate  ⏎ confirm  esc cancel",
         Mode::Help => "  q close",
     };
 

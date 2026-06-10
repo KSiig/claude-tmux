@@ -13,6 +13,7 @@ use ratatui::{
 };
 
 use crate::app::{App, CreatePullRequestField, NewSessionField, NewWorktreeField, SessionAction};
+use crate::session::ClaudeCodeStatus;
 
 use super::help::centered_rect;
 
@@ -728,6 +729,64 @@ pub fn render_rename_dialog(frame: &mut Frame, old_name: &str, new_name: &str) {
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: true });
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+pub fn render_set_status_dialog(
+    frame: &mut Frame,
+    selected: usize,
+    current: ClaudeCodeStatus,
+) {
+    let statuses = ClaudeCodeStatus::ALL;
+    let height = statuses.len() as u16 + 4;
+    let area = centered_rect(30, height, frame.area());
+
+    let block = Block::default()
+        .title(" Set Status ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (i, status) in statuses.iter().enumerate() {
+        let is_selected = i == selected;
+        let is_current = *status == current;
+        let prefix = if is_selected { " > " } else { "   " };
+        let suffix = if is_current { " (current)" } else { "" };
+
+        let color = match status {
+            ClaudeCodeStatus::Working => Color::Green,
+            ClaudeCodeStatus::Done => Color::Cyan,
+            ClaudeCodeStatus::WaitingInput => Color::Yellow,
+            ClaudeCodeStatus::Error => Color::Red,
+            ClaudeCodeStatus::Idle => Color::DarkGray,
+            ClaudeCodeStatus::Unknown => Color::Gray,
+        };
+
+        let style = if is_selected {
+            Style::default().fg(color).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(color)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(status.symbol(), style),
+            Span::styled(format!("  {}{}", status.label(), suffix), style),
+        ]));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "⏎ confirm  esc cancel",
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);

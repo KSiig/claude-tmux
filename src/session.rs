@@ -54,6 +54,15 @@ impl ClaudeCodeStatus {
             ClaudeCodeStatus::Unknown => "unknown",
         }
     }
+
+    pub const ALL: [ClaudeCodeStatus; 6] = [
+        ClaudeCodeStatus::Idle,
+        ClaudeCodeStatus::Working,
+        ClaudeCodeStatus::Done,
+        ClaudeCodeStatus::WaitingInput,
+        ClaudeCodeStatus::Error,
+        ClaudeCodeStatus::Unknown,
+    ];
 }
 
 /// A tmux pane within a session

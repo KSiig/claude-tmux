@@ -1526,6 +1526,63 @@ impl App {
         self.update_preview();
     }
 
+    /// Open the set-status picker for the selected session
+    pub fn start_set_status(&mut self) {
+        self.clear_messages();
+        if self.selected_session().is_some() {
+            let current = self
+                .selected_session()
+                .map(|s| s.claude_code_status)
+                .unwrap_or_default();
+            let idx = ClaudeCodeStatus::ALL
+                .iter()
+                .position(|s| *s == current)
+                .unwrap_or(0);
+            self.mode = Mode::SetStatus { selected: idx };
+        }
+    }
+
+    pub fn select_next_status(&mut self) {
+        if let Mode::SetStatus { ref mut selected } = self.mode {
+            *selected = (*selected + 1) % ClaudeCodeStatus::ALL.len();
+        }
+    }
+
+    pub fn select_prev_status(&mut self) {
+        if let Mode::SetStatus { ref mut selected } = self.mode {
+            if *selected == 0 {
+                *selected = ClaudeCodeStatus::ALL.len() - 1;
+            } else {
+                *selected -= 1;
+            }
+        }
+    }
+
+    pub fn confirm_set_status(&mut self) {
+        let chosen = if let Mode::SetStatus { selected } = self.mode {
+            ClaudeCodeStatus::ALL[selected]
+        } else {
+            return;
+        };
+
+        if let Some(idx) = self.selected_session_index() {
+            let pane_id = self.sessions[idx].claude_code_pane.clone();
+            self.sessions[idx].claude_code_status = chosen;
+            if let Some(pane_id) = pane_id {
+                if chosen == ClaudeCodeStatus::Done {
+                    self.done_panes.insert(pane_id.clone());
+                    self.worked_unfocused.remove(&pane_id);
+                } else {
+                    self.done_panes.remove(&pane_id);
+                    self.worked_unfocused.remove(&pane_id);
+                }
+                self.idle_since.remove(&pane_id);
+            }
+        }
+        self.write_state_file();
+        self.mode = Mode::Normal;
+    }
+
     /// Show help
     pub fn show_help(&mut self) {
         self.clear_messages();

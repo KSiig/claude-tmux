@@ -64,6 +64,8 @@ pub enum Mode {
     },
     /// Showing help
     Help,
+    /// Picking a status to assign to the selected session
+    SetStatus { selected: usize },
 }
 
 /// An action that can be performed on a session
