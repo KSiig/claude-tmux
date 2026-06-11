@@ -17,7 +17,7 @@ impl Tmux {
             .args([
                 "list-sessions",
                 "-F",
-                "#{session_name}|||#{session_created}|||#{session_attached}|||#{session_windows}",
+                "#{session_name}|||#{session_created}|||#{session_attached}|||#{session_windows}|||#{session_activity}",
             ])
             .output()
             .context("Failed to execute tmux list-sessions")?;
@@ -40,6 +40,7 @@ impl Tmux {
                 let created = parts[1].parse().unwrap_or(0);
                 let attached = parts[2] == "1";
                 let window_count = parts[3].parse().unwrap_or(1);
+                let last_activity = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
 
                 // Get panes for this session
                 let panes = Self::list_panes(&name).unwrap_or_default();
@@ -64,6 +65,7 @@ impl Tmux {
                     sessions.push(Session {
                         name: name.clone(),
                         created,
+                        last_activity,
                         attached,
                         working_directory,
                         window_count,
@@ -95,6 +97,7 @@ impl Tmux {
                         sessions.push(Session {
                             name: name.clone(),
                             created,
+                            last_activity,
                             attached,
                             working_directory,
                             window_count,
@@ -273,6 +276,28 @@ impl Tmux {
 
         if !status.success() {
             anyhow::bail!("Failed to rename session {} to {}", old_name, new_name);
+        }
+
+        Ok(())
+    }
+
+    /// Get the first pane ID of a session
+    pub fn first_pane_id(session: &str) -> Result<Option<String>> {
+        let panes = Self::list_panes(session)?;
+        Ok(panes.first().map(|p| p.id.clone()))
+    }
+
+    /// Send keys to a tmux session/pane
+    pub fn send_keys(target: &str, keys: &[&str]) -> Result<()> {
+        let mut args = vec!["send-keys", "-t", target];
+        args.extend_from_slice(keys);
+        let status = Command::new("tmux")
+            .args(&args)
+            .status()
+            .context("Failed to send keys")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to send keys to {}", target);
         }
 
         Ok(())

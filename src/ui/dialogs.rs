@@ -791,3 +791,36 @@ pub fn render_set_status_dialog(
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 }
+
+pub fn render_fork_session_dialog(frame: &mut Frame, source_session: &str, branch_name: &str) {
+    let area = centered_rect(50, 7, frame.area());
+
+    let block = Block::default()
+        .title(format!(" Fork '{}' ", source_session))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::raw("Branch name: "),
+            Span::styled(branch_name, Style::default().fg(Color::Yellow)),
+            Span::raw("_"),
+        ]),
+        Line::raw(""),
+        Line::styled(
+            "Creates a new session with /branch <name>",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Line::styled(
+            "Press Enter to confirm",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}

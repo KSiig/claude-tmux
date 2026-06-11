@@ -44,6 +44,17 @@ impl ClaudeCodeStatus {
         }
     }
 
+    pub fn sort_priority_recent(&self) -> u8 {
+        match self {
+            ClaudeCodeStatus::Error => 0,
+            ClaudeCodeStatus::WaitingInput => 1,
+            ClaudeCodeStatus::Done => 2,
+            ClaudeCodeStatus::Working => 3,
+            ClaudeCodeStatus::Idle => 4,
+            ClaudeCodeStatus::Unknown => 5,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             ClaudeCodeStatus::Idle => "idle",
@@ -92,6 +103,8 @@ pub struct Session {
     pub name: String,
     /// Unix timestamp when session was created
     pub created: i64,
+    /// Unix timestamp of last activity in this session
+    pub last_activity: i64,
     /// Whether a client is attached to this session
     pub attached: bool,
     /// Working directory (from the Claude Code pane, or first pane)

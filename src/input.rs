@@ -19,6 +19,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         Mode::CreatePullRequest { .. } => handle_create_pr_mode(app, key),
         Mode::Help => handle_help_mode(app, key),
         Mode::SetStatus { .. } => handle_set_status_mode(app, key),
+        Mode::ForkSession { .. } => handle_fork_session_mode(app, key),
     }
 }
 
@@ -90,6 +91,11 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         // Set status
         KeyCode::Char('S') => {
             app.start_set_status();
+        }
+
+        // Fork session
+        KeyCode::Char('F') => {
+            app.start_fork_session();
         }
 
         // Help
@@ -538,6 +544,30 @@ fn handle_set_status_mode(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Esc | KeyCode::Char('q') => {
             app.cancel();
+        }
+        _ => {}
+    }
+}
+
+fn handle_fork_session_mode(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            app.cancel();
+        }
+        KeyCode::Enter => {
+            app.confirm_fork_session();
+        }
+        KeyCode::Backspace => {
+            if let Mode::ForkSession { ref mut branch_name, .. } = app.mode {
+                branch_name.pop();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Mode::ForkSession { ref mut branch_name, .. } = app.mode {
+                if c.is_alphanumeric() || c == '-' || c == '_' || c == '/' {
+                    branch_name.push(c);
+                }
+            }
         }
         _ => {}
     }

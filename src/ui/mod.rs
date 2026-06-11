@@ -117,6 +117,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 .unwrap_or_default();
             dialogs::render_set_status_dialog(frame, *selected, current);
         }
+        Mode::ForkSession {
+            source_session,
+            branch_name,
+            ..
+        } => {
+            dialogs::render_fork_session_dialog(frame, source_session, branch_name);
+        }
         Mode::Normal | Mode::ActionMenu => {}
     }
 
@@ -859,6 +866,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Mode::NewWorktree { .. } => "  ⏎ create  tab switch  ↑↓ select  → accept  esc cancel",
         Mode::CreatePullRequest { .. } => "  ⏎ create PR  tab switch  esc cancel",
         Mode::SetStatus { .. } => "  jk navigate  ⏎ confirm  esc cancel",
+        Mode::ForkSession { .. } => "  ⏎ fork  esc cancel",
         Mode::Help => "  q close",
     };
 

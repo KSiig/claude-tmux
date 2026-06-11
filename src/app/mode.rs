@@ -66,6 +66,15 @@ pub enum Mode {
     Help,
     /// Picking a status to assign to the selected session
     SetStatus { selected: usize },
+    /// Forking a session (branch name input)
+    ForkSession {
+        /// Name of the source session being forked
+        source_session: String,
+        /// Working directory of the source session
+        source_dir: std::path::PathBuf,
+        /// Branch name input
+        branch_name: String,
+    },
 }
 
 /// An action that can be performed on a session

@@ -18,7 +18,7 @@ use crate::detection::{self, DetectionBackend, DetectionContext, DetectionMethod
 use crate::git::{self, GitContext, PullRequestInfo};
 use crate::scroll_state::ScrollState;
 use crate::session::{ClaudeCodeStatus, Session};
-use crate::settings::{glob_match, Settings};
+use crate::settings::{glob_match, Settings, SortMethod};
 use crate::tmux::Tmux;
 
 mod grouping;
@@ -92,6 +92,8 @@ pub struct App {
     done_delay: Duration,
     /// Whether to show text labels next to session status icons
     pub session_status_labels: bool,
+    /// How sessions are sorted (status+alpha vs status+recent)
+    sort_method: SortMethod,
     /// Whether session grouping by shared name prefix is enabled
     pub grouping_enabled: bool,
     /// Whether to show task titles (from titles.json / API)
@@ -190,6 +192,7 @@ impl App {
             idle_since: HashMap::new(),
             done_delay: settings.done_delay,
             session_status_labels: settings.session_status_labels,
+            sort_method: settings.sort_method,
             grouping_enabled: settings.grouping,
             task_show_titles,
             task_show_status,
@@ -500,12 +503,24 @@ impl App {
                 })
                 .collect()
         };
-        sessions.sort_by(|a, b| {
-            a.claude_code_status
-                .sort_priority()
-                .cmp(&b.claude_code_status.sort_priority())
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
+        match self.sort_method {
+            SortMethod::StatusRecent => {
+                sessions.sort_by(|a, b| {
+                    a.claude_code_status
+                        .sort_priority_recent()
+                        .cmp(&b.claude_code_status.sort_priority_recent())
+                        .then_with(|| b.last_activity.cmp(&a.last_activity))
+                });
+            }
+            SortMethod::StatusAlpha => {
+                sessions.sort_by(|a, b| {
+                    a.claude_code_status
+                        .sort_priority()
+                        .cmp(&b.claude_code_status.sort_priority())
+                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                });
+            }
+        }
         sessions
     }
 
@@ -1580,6 +1595,122 @@ impl App {
             }
         }
         self.write_state_file();
+        self.mode = Mode::Normal;
+    }
+
+    // =========================================================================
+    // Dialog flows: Fork Session
+    // =========================================================================
+
+    /// Start the fork session flow
+    pub fn start_fork_session(&mut self) {
+        self.clear_messages();
+        let Some(session) = self.selected_session() else {
+            return;
+        };
+        if session.claude_code_pane.is_none() {
+            self.error = Some("No Claude pane in this session".to_string());
+            return;
+        }
+
+        self.mode = Mode::ForkSession {
+            source_session: session.name.clone(),
+            source_dir: session.working_directory.clone(),
+            branch_name: session.name.clone(),
+        };
+    }
+
+    /// Confirm and execute the fork
+    pub fn confirm_fork_session(&mut self) {
+        let (source_session, source_dir, branch_name) =
+            if let Mode::ForkSession {
+                ref source_session,
+                ref source_dir,
+                ref branch_name,
+            } = self.mode
+            {
+                (
+                    source_session.clone(),
+                    source_dir.clone(),
+                    branch_name.clone(),
+                )
+            } else {
+                return;
+            };
+
+        if branch_name.is_empty() {
+            self.error = Some("Branch name cannot be empty".to_string());
+            self.mode = Mode::Normal;
+            return;
+        }
+
+        let existing_names: HashSet<&str> =
+            self.sessions.iter().map(|s| s.name.as_str()).collect();
+        let new_session_name = if existing_names.contains(branch_name.as_str()) {
+            format!("{}-fork", branch_name)
+        } else {
+            branch_name.clone()
+        };
+
+        match Tmux::new_session(&new_session_name, &source_dir, false) {
+            Ok(_) => {
+                if let Err(e) = Tmux::send_keys(
+                    &new_session_name,
+                    &["claude --continue", "Enter"],
+                ) {
+                    self.error = Some(format!("Session created but claude failed to start: {}", e));
+                    self.mode = Mode::Normal;
+                    return;
+                }
+
+                let pane_id = Tmux::first_pane_id(&new_session_name)
+                    .ok()
+                    .flatten();
+
+                let ready = if let Some(ref pid) = pane_id {
+                    let mut found = false;
+                    for _ in 0..30 {
+                        std::thread::sleep(Duration::from_millis(500));
+                        if let Ok(content) = Tmux::capture_pane(pid, 15, true) {
+                            let status =
+                                crate::detection::content::detect_from_content(&content);
+                            if status == ClaudeCodeStatus::Idle {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    found
+                } else {
+                    std::thread::sleep(Duration::from_secs(5));
+                    true
+                };
+
+                if !ready {
+                    self.error = Some(
+                        "Timed out waiting for Claude to start — /branch not sent".to_string(),
+                    );
+                    self.refresh_sessions();
+                    self.mode = Mode::Normal;
+                    return;
+                }
+
+                let branch_cmd = format!("/branch {}", branch_name);
+                if let Err(e) = Tmux::send_keys(&new_session_name, &[&branch_cmd, "Enter"]) {
+                    self.error = Some(format!("Session forked but /branch failed: {}", e));
+                } else {
+                    self.refresh_sessions();
+                    self.message = Some(format!(
+                        "Forked '{}' → '{}'",
+                        source_session, new_session_name
+                    ));
+                }
+            }
+            Err(e) => {
+                self.error = Some(format!("Failed to create fork session: {}", e));
+            }
+        }
+
         self.mode = Mode::Normal;
     }
 

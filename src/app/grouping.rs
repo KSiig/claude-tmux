@@ -247,6 +247,7 @@ mod tests {
         Session {
             name: name.to_string(),
             created: 0,
+            last_activity: 0,
             attached: false,
             working_directory: PathBuf::from("/tmp"),
             window_count: 1,

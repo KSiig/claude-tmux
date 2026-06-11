@@ -27,6 +27,25 @@ fn default_detection_method() -> String {
     "process".to_string()
 }
 
+fn default_sort_method() -> String {
+    "status_alpha".to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortMethod {
+    StatusAlpha,
+    StatusRecent,
+}
+
+impl SortMethod {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "status_recent" => SortMethod::StatusRecent,
+            _ => SortMethod::StatusAlpha,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct TaskIntegrationFile {
     provider: String,
@@ -56,6 +75,8 @@ struct SettingsFile {
     hook_staleness_secs: u64,
     #[serde(default = "default_true")]
     session_status_labels: bool,
+    #[serde(default = "default_sort_method")]
+    sort_method: String,
     #[serde(default)]
     grouping: bool,
     #[serde(default)]
@@ -80,6 +101,7 @@ pub struct Settings {
     pub detection_method: crate::detection::DetectionMethod,
     pub hook_staleness_secs: u64,
     pub session_status_labels: bool,
+    pub sort_method: SortMethod,
     pub grouping: bool,
     pub exclude_sessions: Vec<String>,
     pub task_integration: Option<TaskIntegration>,
@@ -102,6 +124,7 @@ impl Settings {
                 detection_method: crate::detection::DetectionMethod::from_str(&f.detection_method),
                 hook_staleness_secs: f.hook_staleness_secs,
                 session_status_labels: f.session_status_labels,
+                sort_method: SortMethod::from_str(&f.sort_method),
                 grouping: f.grouping,
                 exclude_sessions: f.exclude_sessions,
                 task_integration: f.task_integration.map(|t| TaskIntegration {
@@ -120,6 +143,7 @@ impl Settings {
                 detection_method: crate::detection::DetectionMethod::Process,
                 hook_staleness_secs: default_hook_staleness_secs(),
                 session_status_labels: true,
+                sort_method: SortMethod::StatusAlpha,
                 grouping: false,
                 exclude_sessions: Vec::new(),
                 task_integration: None,
