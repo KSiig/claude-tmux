@@ -10,6 +10,7 @@ mod helpers;
 mod mode;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -114,6 +115,10 @@ pub struct App {
     pub status_since: HashMap<String, u64>,
     /// Group labels that are hidden (collapsed) in the session list
     pub hidden_groups: HashSet<String>,
+    /// Receiver for background fork session results
+    fork_rx: mpsc::Receiver<Result<String, String>>,
+    /// Sender kept alive so the channel doesn't close prematurely
+    fork_tx: mpsc::Sender<Result<String, String>>,
 }
 
 impl App {
@@ -165,6 +170,8 @@ impl App {
             settings.hook_staleness_secs,
         );
 
+        let (fork_tx, fork_rx) = mpsc::channel();
+
         let mut app = Self {
             sessions,
             selected: 0,
@@ -203,6 +210,8 @@ impl App {
             sidecar_tracked: HashSet::new(),
             status_since,
             hidden_groups,
+            fork_rx,
+            fork_tx,
         };
 
         app.apply_persisted_done();
@@ -1620,7 +1629,7 @@ impl App {
         };
     }
 
-    /// Confirm and execute the fork
+    /// Confirm and execute the fork (non-blocking)
     pub fn confirm_fork_session(&mut self) {
         let (source_session, source_dir, branch_name) =
             if let Mode::ForkSession {
@@ -1663,48 +1672,53 @@ impl App {
                     return;
                 }
 
-                let pane_id = Tmux::first_pane_id(&new_session_name)
-                    .ok()
-                    .flatten();
+                self.message = Some(format!("Forking '{}' — waiting for Claude...", source_session));
+                self.refresh_sessions();
 
-                let ready = if let Some(ref pid) = pane_id {
-                    let mut found = false;
-                    for _ in 0..30 {
-                        std::thread::sleep(Duration::from_millis(500));
-                        if let Ok(content) = Tmux::capture_pane(pid, 15, true) {
-                            let status =
-                                crate::detection::content::detect_from_content(&content);
-                            if status == ClaudeCodeStatus::Idle {
-                                found = true;
-                                break;
+                let tx = self.fork_tx.clone();
+                let session_name = new_session_name.clone();
+                let branch = branch_name.clone();
+                let source = source_session.clone();
+
+                std::thread::spawn(move || {
+                    let pane_id = Tmux::first_pane_id(&session_name).ok().flatten();
+
+                    let ready = if let Some(ref pid) = pane_id {
+                        let mut found = false;
+                        for _ in 0..30 {
+                            std::thread::sleep(Duration::from_millis(500));
+                            if let Ok(content) = Tmux::capture_pane(pid, 15, true) {
+                                let status =
+                                    crate::detection::content::detect_from_content(&content);
+                                if status == ClaudeCodeStatus::Idle {
+                                    found = true;
+                                    break;
+                                }
                             }
                         }
+                        found
+                    } else {
+                        std::thread::sleep(Duration::from_secs(5));
+                        true
+                    };
+
+                    if !ready {
+                        let _ = tx.send(Err(
+                            "Timed out waiting for Claude to start — /branch not sent".to_string(),
+                        ));
+                        return;
                     }
-                    found
-                } else {
-                    std::thread::sleep(Duration::from_secs(5));
-                    true
-                };
 
-                if !ready {
-                    self.error = Some(
-                        "Timed out waiting for Claude to start — /branch not sent".to_string(),
-                    );
-                    self.refresh_sessions();
-                    self.mode = Mode::Normal;
-                    return;
-                }
-
-                let branch_cmd = format!("/branch {}", branch_name);
-                if let Err(e) = Tmux::send_keys(&new_session_name, &[&branch_cmd, "Enter"]) {
-                    self.error = Some(format!("Session forked but /branch failed: {}", e));
-                } else {
-                    self.refresh_sessions();
-                    self.message = Some(format!(
-                        "Forked '{}' → '{}'",
-                        source_session, new_session_name
-                    ));
-                }
+                    let branch_cmd = format!("/branch {}", branch);
+                    if let Err(e) = Tmux::send_keys(&session_name, &[&branch_cmd, "Enter"]) {
+                        let _ = tx.send(Err(format!("Session forked but /branch failed: {}", e)));
+                    } else {
+                        let _ = tx.send(Ok(format!(
+                            "Forked '{}' → '{}'",
+                            source, session_name
+                        )));
+                    }
+                });
             }
             Err(e) => {
                 self.error = Some(format!("Failed to create fork session: {}", e));
@@ -1712,6 +1726,22 @@ impl App {
         }
 
         self.mode = Mode::Normal;
+    }
+
+    /// Check for completed background fork results (called from tick_status)
+    pub fn check_fork_result(&mut self) {
+        if let Ok(result) = self.fork_rx.try_recv() {
+            match result {
+                Ok(msg) => {
+                    self.refresh_sessions();
+                    self.message = Some(msg);
+                }
+                Err(msg) => {
+                    self.refresh_sessions();
+                    self.error = Some(msg);
+                }
+            }
+        }
     }
 
     /// Show help

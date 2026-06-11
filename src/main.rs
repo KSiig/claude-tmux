@@ -122,6 +122,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
 
         // Refresh Claude status via configured detection backend (self-throttled)
         app.tick_status();
+
+        // Check for completed background tasks (fork session, etc.)
+        app.check_fork_result();
     }
 
     Ok(())
