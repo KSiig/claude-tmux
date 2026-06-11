@@ -10,7 +10,6 @@ mod monitor;
 mod scroll_state;
 mod session;
 mod settings;
-mod suspend;
 mod tmux;
 mod ui;
 
@@ -84,7 +83,6 @@ fn run_headless() -> Result<()> {
     let backup_interval = settings.backup_interval;
     let auto_backup = settings.auto_backup;
     let backup_rename = settings.backup_rename_sessions;
-    let suspend_enabled = settings.suspend_idle_sessions;
 
     let linear_config = settings.task_integration.as_ref().and_then(|t| {
         if t.provider == "linear" {
@@ -98,17 +96,8 @@ fn run_headless() -> Result<()> {
     let mut linear_poller = linear_config.as_ref().map(|_| linear::LinearPoller::new());
     let mut last_backup: Option<std::time::Instant> = None;
     let mut renamed_panes = std::collections::HashSet::new();
-    let mut suspender = suspend::SuspendManager::new(settings.suspend_grace);
-
-    // Resume any processes left stopped by a previous daemon instance
-    suspender.resume_all();
 
     loop {
-        // Resume all before detection so capture_pane gets fresh content
-        if suspend_enabled {
-            suspender.resume_all();
-        }
-
         if let Err(e) = app.refresh_for_daemon() {
             eprintln!("claude-tmux daemon: refresh failed: {}", e);
         }
@@ -120,11 +109,6 @@ fn run_headless() -> Result<()> {
             let names: Vec<String> = app.session_names();
             let ids = linear::extract_identifiers(&names, prefix.as_deref());
             poller.poll_if_due(*interval, &ids);
-        }
-
-        // Suspend idle unfocused sessions after detection
-        if suspend_enabled {
-            suspender.tick(&app.sessions, app.current_session.as_deref());
         }
 
         if auto_backup {
