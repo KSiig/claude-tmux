@@ -31,6 +31,18 @@ fn default_sort_method() -> String {
     "status_alpha".to_string()
 }
 
+fn default_backup_interval_secs() -> u64 {
+    300
+}
+
+fn default_daemon_interval_ms() -> u64 {
+    5000
+}
+
+fn default_suspend_grace_secs() -> u64 {
+    30
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortMethod {
     StatusAlpha,
@@ -83,6 +95,18 @@ struct SettingsFile {
     exclude_sessions: Vec<String>,
     #[serde(default)]
     task_integration: Option<TaskIntegrationFile>,
+    #[serde(default = "default_true")]
+    auto_backup: bool,
+    #[serde(default = "default_true")]
+    backup_rename_sessions: bool,
+    #[serde(default = "default_backup_interval_secs")]
+    backup_interval_secs: u64,
+    #[serde(default = "default_daemon_interval_ms")]
+    daemon_interval_ms: u64,
+    #[serde(default = "default_true")]
+    suspend_idle_sessions: bool,
+    #[serde(default = "default_suspend_grace_secs")]
+    suspend_grace_secs: u64,
 }
 
 pub struct TaskIntegration {
@@ -105,6 +129,12 @@ pub struct Settings {
     pub grouping: bool,
     pub exclude_sessions: Vec<String>,
     pub task_integration: Option<TaskIntegration>,
+    pub auto_backup: bool,
+    pub backup_rename_sessions: bool,
+    pub backup_interval: Duration,
+    pub daemon_interval: Duration,
+    pub suspend_idle_sessions: bool,
+    pub suspend_grace: Duration,
 }
 
 impl Settings {
@@ -135,6 +165,12 @@ impl Settings {
                     show_status: t.show_status,
                     status_labels: t.status_labels,
                 }),
+                auto_backup: f.auto_backup,
+                backup_rename_sessions: f.backup_rename_sessions,
+                backup_interval: Duration::from_secs(f.backup_interval_secs.max(60)),
+                daemon_interval: Duration::from_millis(f.daemon_interval_ms.max(1000)),
+                suspend_idle_sessions: f.suspend_idle_sessions,
+                suspend_grace: Duration::from_secs(f.suspend_grace_secs),
             },
             None => Settings {
                 status_interval: Duration::from_millis(default_status_interval_ms()),
@@ -147,6 +183,12 @@ impl Settings {
                 grouping: false,
                 exclude_sessions: Vec::new(),
                 task_integration: None,
+                auto_backup: true,
+                backup_rename_sessions: true,
+                backup_interval: Duration::from_secs(default_backup_interval_secs()),
+                daemon_interval: Duration::from_millis(default_daemon_interval_ms()),
+                suspend_idle_sessions: true,
+                suspend_grace: Duration::from_secs(default_suspend_grace_secs()),
             },
         }
     }

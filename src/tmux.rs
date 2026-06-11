@@ -7,12 +7,29 @@ use crate::detection::content::detect_from_content;
 use crate::git::GitContext;
 use crate::session::{ClaudeCodeStatus, Pane, Session};
 
+#[derive(Debug, Clone)]
+pub struct WindowInfo {
+    pub index: String,
+    pub name: String,
+    pub layout: String,
+}
+
 /// Wrapper for tmux command execution
 pub struct Tmux;
 
 impl Tmux {
-    /// List all tmux sessions with their metadata
+    /// List all tmux sessions with their metadata and detect Claude status
     pub fn list_sessions() -> Result<Vec<Session>> {
+        Self::list_sessions_inner(true)
+    }
+
+    /// List all tmux sessions without running status detection or git context.
+    /// Used by the headless daemon where tick_status() handles detection separately.
+    pub fn list_sessions_fast() -> Result<Vec<Session>> {
+        Self::list_sessions_inner(false)
+    }
+
+    fn list_sessions_inner(detect: bool) -> Result<Vec<Session>> {
         let output = Command::new("tmux")
             .args([
                 "list-sessions",
@@ -60,7 +77,11 @@ impl Tmux {
                         .first()
                         .map(|p| p.current_path.clone())
                         .unwrap_or_default();
-                    let git_context = GitContext::detect(&working_directory);
+                    let git_context = if detect {
+                        GitContext::detect(&working_directory)
+                    } else {
+                        None
+                    };
 
                     sessions.push(Session {
                         name: name.clone(),
@@ -78,12 +99,20 @@ impl Tmux {
                     });
                 } else {
                     for claude_pane in claude_panes {
-                        let status = Self::capture_pane(&claude_pane.id, 15, true)
-                            .map(|content| detect_from_content(&content))
-                            .unwrap_or(ClaudeCodeStatus::Unknown);
+                        let status = if detect {
+                            Self::capture_pane(&claude_pane.id, 15, true)
+                                .map(|content| detect_from_content(&content))
+                                .unwrap_or(ClaudeCodeStatus::Unknown)
+                        } else {
+                            ClaudeCodeStatus::Unknown
+                        };
 
                         let working_directory = claude_pane.current_path.clone();
-                        let git_context = GitContext::detect(&working_directory);
+                        let git_context = if detect {
+                            GitContext::detect(&working_directory)
+                        } else {
+                            None
+                        };
 
                         let (window_label, target_window_index) = if multi {
                             (
@@ -126,7 +155,7 @@ impl Tmux {
     }
 
     /// List all panes in a session, across every window
-    fn list_panes(session: &str) -> Result<Vec<Pane>> {
+    pub fn list_panes(session: &str) -> Result<Vec<Pane>> {
         let output = Command::new("tmux")
             .args([
                 "list-panes",
@@ -298,6 +327,109 @@ impl Tmux {
 
         if !status.success() {
             anyhow::bail!("Failed to send keys to {}", target);
+        }
+
+        Ok(())
+    }
+
+    /// List all windows in a session with their layout strings
+    pub fn list_windows(session: &str) -> Result<Vec<WindowInfo>> {
+        let output = Command::new("tmux")
+            .args([
+                "list-windows",
+                "-t",
+                session,
+                "-F",
+                "#{window_index}|||#{window_name}|||#{window_layout}",
+            ])
+            .output()
+            .context("Failed to execute tmux list-windows")?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut windows = Vec::new();
+
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split("|||").collect();
+            if parts.len() >= 3 {
+                windows.push(WindowInfo {
+                    index: parts[0].to_string(),
+                    name: parts[1].to_string(),
+                    layout: parts[2].to_string(),
+                });
+            }
+        }
+
+        Ok(windows)
+    }
+
+    /// Create a new window in an existing session
+    pub fn new_window(session: &str, name: &str, path: &std::path::Path) -> Result<()> {
+        let path_str = path.to_string_lossy();
+
+        let status = Command::new("tmux")
+            .args(["new-window", "-t", session, "-n", name, "-c", &path_str])
+            .status()
+            .context("Failed to create new window")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to create window {} in session {}", name, session);
+        }
+
+        Ok(())
+    }
+
+    /// Split a pane and return the new pane ID
+    pub fn split_pane(target: &str, path: &std::path::Path) -> Result<String> {
+        let path_str = path.to_string_lossy();
+
+        let output = Command::new("tmux")
+            .args([
+                "split-window",
+                "-t",
+                target,
+                "-c",
+                &path_str,
+                "-P",
+                "-F",
+                "#{pane_id}",
+            ])
+            .output()
+            .context("Failed to split pane")?;
+
+        if !output.status.success() {
+            anyhow::bail!("Failed to split pane at {}", target);
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Apply a saved layout string to a window
+    pub fn select_layout(target: &str, layout: &str) -> Result<()> {
+        let status = Command::new("tmux")
+            .args(["select-layout", "-t", target, layout])
+            .status()
+            .context("Failed to select layout")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to apply layout to {}", target);
+        }
+
+        Ok(())
+    }
+
+    /// Rename a window
+    pub fn rename_window(target: &str, new_name: &str) -> Result<()> {
+        let status = Command::new("tmux")
+            .args(["rename-window", "-t", target, new_name])
+            .status()
+            .context("Failed to rename window")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to rename window at {}", target);
         }
 
         Ok(())
