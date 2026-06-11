@@ -1,5 +1,4 @@
 mod app;
-mod backup;
 mod completion;
 mod detection;
 mod git;
@@ -31,14 +30,6 @@ fn main() -> Result<()> {
 
     if args.iter().any(|a| a == "init") {
         return init::run_init();
-    }
-
-    if args.iter().any(|a| a == "backup") {
-        return backup::run_backup();
-    }
-
-    if args.iter().any(|a| a == "restore") {
-        return backup::run_restore();
     }
 
     if args.iter().any(|a| a == "monitor") {
@@ -79,10 +70,7 @@ fn main() -> Result<()> {
 
 fn run_headless() -> Result<()> {
     let settings = Settings::load();
-    let sleep_interval = settings.daemon_interval;
-    let backup_interval = settings.backup_interval;
-    let auto_backup = settings.auto_backup;
-    let backup_rename = settings.backup_rename_sessions;
+    let sleep_interval = settings.status_interval;
 
     let linear_config = settings.task_integration.as_ref().and_then(|t| {
         if t.provider == "linear" {
@@ -94,8 +82,6 @@ fn run_headless() -> Result<()> {
 
     let mut app = App::new(true)?;
     let mut linear_poller = linear_config.as_ref().map(|_| linear::LinearPoller::new());
-    let mut last_backup: Option<std::time::Instant> = None;
-    let mut renamed_panes = std::collections::HashSet::new();
 
     loop {
         if let Err(e) = app.refresh_for_daemon() {
@@ -109,20 +95,6 @@ fn run_headless() -> Result<()> {
             let names: Vec<String> = app.session_names();
             let ids = linear::extract_identifiers(&names, prefix.as_deref());
             poller.poll_if_due(*interval, &ids);
-        }
-
-        if auto_backup {
-            let should_backup = last_backup
-                .map(|t| t.elapsed() >= backup_interval)
-                .unwrap_or(true);
-            if should_backup {
-                last_backup = Some(std::time::Instant::now());
-                if let Err(e) =
-                    backup::capture_and_save(&settings, backup_rename, &mut renamed_panes)
-                {
-                    eprintln!("claude-tmux daemon: backup failed: {}", e);
-                }
-            }
         }
 
         std::thread::sleep(sleep_interval);

@@ -455,7 +455,7 @@ impl App {
     /// Refresh sessions and current attached session for headless daemon mode.
     /// Re-lists tmux sessions on every call so newly spawned sessions are picked up.
     pub fn refresh_for_daemon(&mut self) -> Result<()> {
-        self.sessions = self.filter_excluded(Tmux::list_sessions_fast()?);
+        self.sessions = self.filter_excluded(Tmux::list_sessions()?);
         self.current_session = Tmux::current_session()?;
         Ok(())
     }
