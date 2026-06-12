@@ -289,6 +289,12 @@ impl App {
             detection::sidecar::ensure_sidecars(&pane_ids, &mut self.sidecar_tracked);
         }
 
+        if self.writes_status_file {
+            let pane_pids: Vec<u32> =
+                targets.iter().filter_map(|(_, _, pid)| *pid).collect();
+            self.backend.cleanup_stale_processes(&pane_pids);
+        }
+
         for (idx, pane_id, pane_pid) in targets {
             let content = if needs_content {
                 Tmux::capture_pane(&pane_id, 15, true).ok()

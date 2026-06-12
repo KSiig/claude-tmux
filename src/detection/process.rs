@@ -129,6 +129,24 @@ impl ProcessBackend {
 
         None
     }
+
+    fn find_all_claude_in_pane(&self, pane_pid: u32) -> Vec<u32> {
+        let Some(tree) = self.tree.as_ref() else {
+            return vec![];
+        };
+        tree.descendants(pane_pid)
+            .into_iter()
+            .filter(|&pid| {
+                tree.by_pid
+                    .get(&pid)
+                    .map(|info| {
+                        let base = info.comm.rsplit('/').next().unwrap_or(&info.comm);
+                        base == "claude"
+                    })
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
 }
 
 impl DetectionBackend for ProcessBackend {
@@ -166,6 +184,36 @@ impl DetectionBackend for ProcessBackend {
         ctx.pane_content
             .map(content::detect_from_content)
             .unwrap_or(ClaudeCodeStatus::Unknown)
+    }
+
+    fn cleanup_stale_processes(&mut self, pane_pids: &[u32]) {
+        for &pane_pid in pane_pids {
+            let claude_pids = self.find_all_claude_in_pane(pane_pid);
+            if claude_pids.len() <= 1 {
+                continue;
+            }
+
+            let tree = self.tree.as_ref().unwrap();
+
+            let active = claude_pids
+                .iter()
+                .find(|&&pid| tree.has_tool_children(pid))
+                .copied()
+                .or_else(|| claude_pids.iter().copied().max())
+                .unwrap();
+
+            for &pid in &claude_pids {
+                if pid != active {
+                    let _ = std::process::Command::new("kill")
+                        .arg(pid.to_string())
+                        .output();
+                    eprintln!(
+                        "claude-tmux: killed stale claude process {} (keeping active {})",
+                        pid, active
+                    );
+                }
+            }
+        }
     }
 }
 

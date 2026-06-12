@@ -48,6 +48,8 @@ pub trait DetectionBackend {
     fn needs_content(&self) -> bool {
         false
     }
+
+    fn cleanup_stale_processes(&mut self, _pane_pids: &[u32]) {}
 }
 
 pub fn create_backend(method: DetectionMethod, staleness_secs: u64) -> Box<dyn DetectionBackend> {
